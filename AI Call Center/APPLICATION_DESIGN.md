@@ -511,7 +511,7 @@ Record each accepted decision in `docs/adr/`.
 
 ### Technology
 
-- Supported .NET and C# versions, SDK pinning policy, and hosting platform.
+- Hosting platform. The .NET 10 LTS/C# 14 and Node.js 24 LTS development baseline is accepted in [ADR 0001](./docs/adr/0001-development-platform-baseline.md).
 - Relational database, cache, object storage, and search/vector strategy.
 - MQTT broker and operating model; required persistence, clustering, ACL, and MQTT version.
 - Telephony, speech-to-text, text-to-speech, AI model/provider, messaging, and identity providers.
