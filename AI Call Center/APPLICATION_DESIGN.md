@@ -3,7 +3,7 @@
 > Status: Draft / source of truth before implementation  
 > Initial vertical: Dental offices  
 > Future direction: Multi-tenant, multi-industry AI communications platform  
-> Core stack: .NET APIs/workers, React, TypeScript, Redux Toolkit, MQTT, BFF pattern  
+> Core stack: C#/.NET APIs and workers, React, TypeScript, Redux Toolkit, MQTT, BFF pattern
 > Initial dental system: Open Dental
 
 ## 1. Product Vision
@@ -188,6 +188,19 @@ ModuleName/
 ```
 
 Dependencies point inward: Presentation and Infrastructure depend on Application/Domain contracts; Domain does not depend on infrastructure, ASP.NET, EF Core, MQTT, or AI provider SDKs.
+
+### C# and .NET conventions
+
+C# is the required backend programming language for the BFF, platform API, domain/application modules, workers, integrations, event consumers, migrations, and backend automated tests. Select a supported .NET release in an ADR before scaffolding and pin it in `global.json`.
+
+- Enable nullable reference types and implicit global usings across the solution.
+- Use asynchronous APIs for network, database, broker, storage, and provider operations; propagate `CancellationToken` through request and message-handling boundaries.
+- Prefer immutable `record` types for messages and value-oriented contracts, while keeping domain entities explicit about identity and controlled state changes.
+- Use strongly typed identifiers and value objects for tenant, location, call, patient/contact, and appointment identifiers instead of passing unrelated raw strings or GUIDs interchangeably.
+- Centralize compiler settings, warnings-as-errors policy, analyzers, formatting, and package versions in `Directory.Build.props`, `.editorconfig`, and `Directory.Packages.props`.
+- Keep public C# contracts documented and versioned. Do not expose Entity Framework entities, Open Dental DTOs, MQTT SDK objects, or AI-provider models from application boundaries.
+- Use dependency injection at composition roots and small explicit interfaces at external boundaries; avoid service-locator and static mutable state patterns.
+- Use structured logging with named properties and source-generated logging where it materially improves hot-path performance. Sensitive patient data must not be included in log templates or arguments.
 
 ### BFF boundary
 
@@ -495,7 +508,7 @@ Record each accepted decision in `docs/adr/`.
 
 ### Technology
 
-- Supported .NET version and hosting platform.
+- Supported .NET and C# versions, SDK pinning policy, and hosting platform.
 - Relational database, cache, object storage, and search/vector strategy.
 - MQTT broker and operating model; required persistence, clustering, ACL, and MQTT version.
 - Telephony, speech-to-text, text-to-speech, AI model/provider, messaging, and identity providers.
