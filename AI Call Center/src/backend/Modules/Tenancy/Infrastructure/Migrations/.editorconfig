@@ -1,0 +1,5 @@
+[*.cs]
+# EF Core owns generated migration source. Application code remains under the
+# repository-wide warnings-as-errors policy.
+dotnet_diagnostic.IDE0161.severity = none
+dotnet_diagnostic.CA1861.severity = none

@@ -5,6 +5,16 @@
     <ProjectReference Include="..\..\..\BuildingBlocks\PurpleGlass.Observability\PurpleGlass.Observability.csproj" />
     <ProjectReference Include="..\Application\PurpleGlass.Modules.Tenancy.Application.csproj" />
     <ProjectReference Include="..\Domain\PurpleGlass.Modules.Tenancy.Domain.csproj" />
+    <ProjectReference Include="..\..\Audit\Infrastructure\PurpleGlass.Modules.Audit.Infrastructure.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
   </ItemGroup>
 
   <PropertyGroup>

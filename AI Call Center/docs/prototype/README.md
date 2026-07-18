@@ -26,6 +26,8 @@ The prototype uses synthetic tenants and locations only.
 4. [First Vertical Slice](./04_FIRST_VERTICAL_SLICE.md)
 5. [Testing, Acceptance, and Demo](./05_TESTING_ACCEPTANCE_AND_DEMO.md)
 6. [Prototype Backlog](./06_PROTOTYPE_BACKLOG.md)
+7. [Implementation Status](./07_IMPLEMENTATION_STATUS.md)
+8. [Local Prototype Runbook](../runbooks/LOCAL_PROTOTYPE.md)
 
 ## How to use the series
 
@@ -45,4 +47,4 @@ The prototype uses synthetic tenants and locations only.
 | Blocked | A named external decision or dependency prevents progress |
 | Complete | Deliverables exist and the documented exit gate passes |
 
-Initial prototype status: **In progress**. Phase 0 and the Phase 1 backend skeleton are implemented; local infrastructure is next.
+Initial prototype status: **In progress**. The first React-to-PostgreSQL-to-MQTT-to-SSE vertical slice runs locally; hardening and external adapters remain.

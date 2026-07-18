@@ -8,10 +8,36 @@
           "PurpleGlass.SharedKernel": "[1.0.0, )"
         }
       },
+      "purpleglass.eventing": {
+        "type": "Project",
+        "dependencies": {
+          "PurpleGlass.Application.Abstractions": "[1.0.0, )",
+          "PurpleGlass.SharedKernel": "[1.0.0, )"
+        }
+      },
+      "purpleglass.modules.audit.application": {
+        "type": "Project",
+        "dependencies": {
+          "PurpleGlass.Application.Abstractions": "[1.0.0, )",
+          "PurpleGlass.Modules.Audit.Contracts": "[1.0.0, )",
+          "PurpleGlass.Modules.Audit.Domain": "[1.0.0, )"
+        }
+      },
+      "purpleglass.modules.audit.contracts": {
+        "type": "Project"
+      },
+      "purpleglass.modules.audit.domain": {
+        "type": "Project",
+        "dependencies": {
+          "PurpleGlass.SharedKernel": "[1.0.0, )"
+        }
+      },
       "purpleglass.modules.tenancy.application": {
         "type": "Project",
         "dependencies": {
           "PurpleGlass.Application.Abstractions": "[1.0.0, )",
+          "PurpleGlass.Eventing": "[1.0.0, )",
+          "PurpleGlass.Modules.Audit.Application": "[1.0.0, )",
           "PurpleGlass.Modules.Tenancy.Contracts": "[1.0.0, )",
           "PurpleGlass.Modules.Tenancy.Domain": "[1.0.0, )"
         }

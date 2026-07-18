@@ -16,6 +16,9 @@
 **/coverage/
 **/.eslintcache
 **/npm-debug.log*
+**/*.tsbuildinfo
+**/vite.config.js
+**/vite.config.d.ts
 
 # IDEs
 .vs/

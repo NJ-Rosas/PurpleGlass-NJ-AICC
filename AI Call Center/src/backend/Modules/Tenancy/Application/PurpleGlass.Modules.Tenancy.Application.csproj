@@ -4,6 +4,8 @@
     <ProjectReference Include="..\..\..\BuildingBlocks\PurpleGlass.Application.Abstractions\PurpleGlass.Application.Abstractions.csproj" />
     <ProjectReference Include="..\Domain\PurpleGlass.Modules.Tenancy.Domain.csproj" />
     <ProjectReference Include="..\Contracts\PurpleGlass.Modules.Tenancy.Contracts.csproj" />
+    <ProjectReference Include="..\..\Audit\Application\PurpleGlass.Modules.Audit.Application.csproj" />
+    <ProjectReference Include="..\..\..\BuildingBlocks\PurpleGlass.Eventing\PurpleGlass.Eventing.csproj" />
   </ItemGroup>
 
   <PropertyGroup>
