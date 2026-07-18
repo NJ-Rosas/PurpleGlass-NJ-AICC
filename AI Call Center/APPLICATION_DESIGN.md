@@ -6,6 +6,8 @@
 > Core stack: C#/.NET APIs and workers, React, TypeScript, Redux Toolkit, MQTT, BFF pattern
 > Initial dental system: Open Dental
 
+Detailed folder ownership, dependency rules, and runtime relationships are documented in the [Architecture Documentation Guide](./docs/architecture/README.md).
+
 ## 1. Product Vision
 
 Build an AI receptionist and call-center service that can answer and place calls, understand a caller's intent, perform approved business actions, transfer to a human, and keep a complete audit trail.
@@ -88,6 +90,7 @@ AI Call Center/
 ├── global.json
 ├── docker-compose.yml
 ├── docs/
+│   ├── architecture/                # Folder ownership, dependencies, runtime relationships
 │   ├── adr/                         # Architecture Decision Records
 │   ├── api/                         # API conventions and generated contracts
 │   ├── events/                      # Event catalog and schemas
