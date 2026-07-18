@@ -31,6 +31,7 @@ Documentation that explains decisions, operations, contracts, security, and syst
 | `docs/events/` | Event catalog, ownership, delivery semantics, ordering, retry, and examples | Complements AsyncAPI and JSON schemas in `contracts` |
 | `docs/compliance/` | Data inventory, classification, consent, retention, vendor agreements, access rules | Referenced by implementation, operations, and security tests |
 | `docs/runbooks/` | Operational response steps for outages, failed messages, data incidents, and recovery | Links to dashboards, alerts, deploy procedures, and owning hosts |
+| `docs/prototype/` | Numbered prototype scope, roadmap, checklists, vertical slices, acceptance, demos, and backlog | Converts architecture into gated implementation phases |
 | `docs/threat-model/` | Trust boundaries, assets, abuse cases, threats, and mitigations | Updated when new integrations, data flows, or externally exposed endpoints appear |
 
 Documentation never replaces executable tests or schemas. OpenAPI, AsyncAPI, and JSON schemas remain the machine-verifiable contracts.
@@ -182,4 +183,3 @@ Small repeatable developer, CI, migration, contract-generation, and verification
 ## `samples/`
 
 Synthetic examples such as webhook payloads, event envelopes, conversation fixtures, Open Dental simulator data, and local demo tenant configuration. Samples are non-production, non-sensitive, documented, and validated against the schemas where possible.
-

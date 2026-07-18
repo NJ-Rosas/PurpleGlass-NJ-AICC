@@ -8,6 +8,8 @@
 
 Detailed folder ownership, dependency rules, and runtime relationships are documented in the [Architecture Documentation Guide](./docs/architecture/README.md).
 
+The implementation sequence and acceptance gates for the first executable prototype are documented in the [Prototype 1 Delivery Guide](./docs/prototype/README.md).
+
 ## 1. Product Vision
 
 Build an AI receptionist and call-center service that can answer and place calls, understand a caller's intent, perform approved business actions, transfer to a human, and keep a complete audit trail.
@@ -96,6 +98,7 @@ AI Call Center/
 │   ├── events/                      # Event catalog and schemas
 │   ├── compliance/                  # Retention, consent, access, incident plans
 │   ├── runbooks/                    # Operations and incident procedures
+│   ├── prototype/                   # Prototype phases, checklists, backlog, acceptance
 │   └── threat-model/                # Data flows, assets, threats, mitigations
 ├── contracts/
 │   ├── asyncapi/                    # MQTT/event documentation
