@@ -45,5 +45,4 @@ The prototype uses synthetic tenants and locations only.
 | Blocked | A named external decision or dependency prevents progress |
 | Complete | Deliverables exist and the documented exit gate passes |
 
-Initial prototype status: **Not started**.
-
+Initial prototype status: **In progress**. Phase 0 and the Phase 1 backend skeleton are implemented; local infrastructure is next.

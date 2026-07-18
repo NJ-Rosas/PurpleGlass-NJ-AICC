@@ -1,0 +1,16 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\BuildingBlocks\PurpleGlass.Eventing\PurpleGlass.Eventing.csproj" />
+    <ProjectReference Include="..\..\..\BuildingBlocks\PurpleGlass.Observability\PurpleGlass.Observability.csproj" />
+    <ProjectReference Include="..\Application\PurpleGlass.Modules.Tenancy.Application.csproj" />
+    <ProjectReference Include="..\Domain\PurpleGlass.Modules.Tenancy.Domain.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+</Project>

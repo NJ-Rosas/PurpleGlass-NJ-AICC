@@ -4,42 +4,42 @@ This checklist controls the setup work that must be complete before the first bu
 
 ## A. Toolchain
 
-- [ ] `global.json` pins .NET SDK 10.0.302.
-- [ ] Node engine policy requires Node.js 24 LTS.
-- [ ] npm version and lockfile policy are documented.
-- [ ] Docker Desktop and Compose versions meet ADR 0001.
-- [ ] Tool-version verification is available as a documented command/script.
+- [x] `global.json` pins .NET SDK 10.0.302.
+- [x] Node engine policy requires Node.js 24 LTS.
+- [x] npm version and lockfile policy are documented.
+- [x] Docker Desktop and Compose versions meet ADR 0001.
+- [x] Tool-version verification is available as a documented command/script.
 - [ ] No optional .NET workload is installed without a demonstrated requirement.
 
 ## B. Repository configuration
 
-- [ ] `.editorconfig` exists and applies consistently.
-- [ ] `.gitignore` excludes IDE, build, package, environment, coverage, secret, and operating-system artifacts.
-- [ ] Line endings and UTF-8 policy are defined.
-- [ ] Root README contains exact setup/build/test/start commands.
+- [x] `.editorconfig` exists and applies consistently.
+- [x] `.gitignore` excludes IDE, build, package, environment, coverage, secret, and operating-system artifacts.
+- [x] Line endings and UTF-8 policy are defined.
+- [x] Root README contains exact setup/build/test/start commands.
 - [ ] Dependency and license update process is documented.
 - [ ] Secret scanning and dependency scanning are planned for CI.
 
 ## C. C# build configuration
 
-- [ ] Nullable reference types are enabled.
-- [ ] Implicit usings policy is consistent.
-- [ ] Warnings policy is centralized.
-- [ ] Analyzer packages and versions are centralized.
-- [ ] Deterministic/CI build settings are enabled.
-- [ ] NuGet package versions live in `Directory.Packages.props`.
-- [ ] Package lock/restore policy is chosen and documented.
-- [ ] Project names, namespaces, assembly names, and root namespaces follow one convention.
+- [x] Nullable reference types are enabled.
+- [x] Implicit usings policy is consistent.
+- [x] Warnings policy is centralized.
+- [x] Analyzer configuration and package versions are centralized.
+- [x] Deterministic/CI build settings are enabled.
+- [x] NuGet package versions live in `Directory.Packages.props`.
+- [x] Package lock/restore policy is chosen and documented.
+- [x] Project names, namespaces, assembly names, and root namespaces follow one convention.
 
 ## D. Backend project graph
 
-- [ ] Solution contains only projects required for Prototype 1.
-- [ ] Tenancy has Domain, Application, Infrastructure, Contracts, and Presentation projects.
-- [ ] Hosts are executable composition roots.
-- [ ] Shared libraries have a narrow documented purpose.
-- [ ] Production projects do not reference `PurpleGlass.Testing`.
-- [ ] Domain projects do not reference ASP.NET, EF Core, MQTT, or provider SDKs.
-- [ ] Architecture tests validate the intended references.
+- [x] Solution contains only projects required for Prototype 1.
+- [x] Tenancy has Domain, Application, Infrastructure, Contracts, and Presentation projects.
+- [x] Hosts are executable composition roots.
+- [x] Shared libraries have a narrow documented purpose.
+- [x] Production projects do not reference `PurpleGlass.Testing`.
+- [x] Domain projects do not reference ASP.NET, EF Core, MQTT, or provider SDKs.
+- [x] Architecture tests validate the intended references.
 
 ## E. Frontend foundation
 
@@ -128,4 +128,3 @@ This checklist controls the setup work that must be complete before the first bu
 - [ ] Every mandatory item above is complete or has an explicitly accepted ADR exception.
 - [ ] The current implementation matches the architecture documentation.
 - [ ] A new developer can reproduce the environment from the README.
-

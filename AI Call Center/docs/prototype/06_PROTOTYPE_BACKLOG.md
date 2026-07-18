@@ -4,34 +4,34 @@ Items are ordered by dependency. `P0` is required for prototype completion; `P1`
 
 ## Epic 0 — Decisions
 
-- [ ] **P0** ADR: choose BFF realtime transport (SSE recommended for one-way prototype updates versus WebSocket).
-- [ ] **P0** ADR: choose development-session mechanism and ensure production configuration cannot enable it.
-- [ ] **P0** ADR: define module database/schema ownership and migration strategy.
-- [ ] **P0** ADR: define outbox/inbox ownership and processing model.
+- [x] **P0** ADR: choose BFF realtime transport (SSE recommended for one-way prototype updates versus WebSocket).
+- [x] **P0** ADR: choose development-session mechanism and ensure production configuration cannot enable it.
+- [x] **P0** ADR: define module database/schema ownership and migration strategy.
+- [x] **P0** ADR: define outbox/inbox ownership and processing model.
 - [ ] **P0** Define ports, local URLs, and configuration naming conventions.
 
 ## Epic 1 — Toolchain and root configuration
 
-- [ ] **P0** Add `global.json` for .NET SDK 10.0.302.
-- [ ] **P0** Add `.editorconfig`.
-- [ ] **P0** Add `Directory.Build.props`.
-- [ ] **P0** Add `Directory.Packages.props`.
-- [ ] **P0** Expand `.gitignore` for .NET, Node, IDE, environment, coverage, and generated artifacts.
-- [ ] **P0** Add toolchain verification command/documentation.
+- [x] **P0** Add `global.json` for .NET SDK 10.0.302.
+- [x] **P0** Add `.editorconfig`.
+- [x] **P0** Add `Directory.Build.props`.
+- [x] **P0** Add `Directory.Packages.props`.
+- [x] **P0** Expand `.gitignore` for .NET, Node, IDE, environment, coverage, and generated artifacts.
+- [x] **P0** Add toolchain verification command/documentation.
 - [ ] **P1** Add repository-wide formatting convenience command.
 
 ## Epic 2 — Backend skeleton
 
-- [ ] **P0** Create solution and initial project files.
-- [ ] **P0** Add project references matching architecture rules.
+- [x] **P0** Create solution and initial project files.
+- [x] **P0** Add project references matching architecture rules.
 - [ ] **P0** Create SharedKernel typed-ID/result/time primitives only as required by the slice.
 - [ ] **P0** Create Application abstraction interfaces required by the slice.
 - [ ] **P0** Create Eventing and Observability registration foundations.
-- [ ] **P0** Create WebBff, Api, Migrations, and outbox worker hosts.
-- [ ] **P0** Create Tenancy layered projects.
-- [ ] **P0** Create minimal Audit projects required by the workflow.
-- [ ] **P0** Add unit, integration, and architecture test projects.
-- [ ] **P0** Make restore/build/test pass before domain expansion.
+- [x] **P0** Create WebBff, Api, Migrations, and outbox worker hosts.
+- [x] **P0** Create Tenancy layered projects.
+- [x] **P0** Create minimal Audit projects required by the workflow.
+- [x] **P0** Add unit, integration, and architecture test projects.
+- [x] **P0** Make restore/build/test pass before domain expansion.
 
 ## Epic 3 — Local infrastructure
 
@@ -121,4 +121,3 @@ Items are ordered by dependency. `P0` is required for prototype completion; `P1`
 - [ ] Final acceptance checklist passes.
 - [ ] Documentation matches the executable system.
 - [ ] Prototype 2 work has not leaked into Prototype 1 without approval.
-

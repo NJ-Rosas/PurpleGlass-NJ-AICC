@@ -1,0 +1,30 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\src\backend\Modules\Tenancy\Domain\PurpleGlass.Modules.Tenancy.Domain.csproj" />
+    <ProjectReference Include="..\..\..\src\backend\Modules\Tenancy\Application\PurpleGlass.Modules.Tenancy.Application.csproj" />
+    <ProjectReference Include="..\..\..\src\backend\Modules\Tenancy\Infrastructure\PurpleGlass.Modules.Tenancy.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\..\src\backend\Modules\Tenancy\Presentation\PurpleGlass.Modules.Tenancy.Presentation.csproj" />
+    <ProjectReference Include="..\..\..\src\backend\Modules\Audit\Domain\PurpleGlass.Modules.Audit.Domain.csproj" />
+    <ProjectReference Include="..\..\..\src\backend\Modules\Audit\Application\PurpleGlass.Modules.Audit.Application.csproj" />
+  </ItemGroup>
+
+</Project>
