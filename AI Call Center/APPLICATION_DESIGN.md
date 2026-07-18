@@ -78,7 +78,7 @@ Typical dashboard flow:
 ## 5. Proposed Repository Structure
 
 ```text
-PurpleGlass/
+AI Call Center/
 ├── APPLICATION_DESIGN.md
 ├── README.md
 ├── .editorconfig
