@@ -6,7 +6,7 @@ using PurpleGlass.Modules.Tenancy.Infrastructure;
 
 var builder = Host.CreateApplicationBuilder(args);
 string connectionString = builder.Configuration.GetConnectionString("Postgres")
-    ?? "Host=localhost;Port=5432;Database=purpleglass;Username=purpleglass;Password=purpleglass_dev_only";
+    ?? "Host=localhost;Port=5433;Database=purpleglass;Username=purpleglass;Password=purpleglass_dev_only";
 
 builder.Services.AddTenancyInfrastructure(connectionString);
 

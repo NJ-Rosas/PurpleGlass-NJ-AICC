@@ -1,6 +1,6 @@
 # Prototype 1 Implementation Status
 
-Status date: 2026-07-18
+Status date: 2026-07-20
 
 ## Proven locally
 
@@ -14,12 +14,13 @@ Status date: 2026-07-18
 - The worker publishes pending events to MQTT with QoS 1.
 - The BFF relays MQTT through a browser-safe SSE endpoint.
 - A runtime test received `location-display-name-changed` over SSE after commit.
+- The process-local realtime hub filters MQTT events by the tenant in each BFF session.
+- Unit tests cover realtime tenant isolation and MQTT topic validation.
 - Frontend production build succeeds; npm reported zero known vulnerabilities during install.
 
 ## Still open
 
 - Production identity, authorization policies, cookies, CSRF, and security headers.
-- Strict per-session filtering in the process-local SSE hub before multi-tenant use.
 - Outbox leasing, inbox deduplication, dead letters, and broker outage automation.
 - Broad domain, integration, frontend, and end-to-end automated tests.
 - Full OpenTelemetry correlation.

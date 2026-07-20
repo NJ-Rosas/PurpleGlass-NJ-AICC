@@ -53,13 +53,17 @@ bff.MapPut(
     async (Guid locationId, UpdateLocationDisplayNameRequest request, TenancyService service, CancellationToken cancellationToken) =>
         Results.Ok(await service.UpdateLocationDisplayNameAsync(locationId, request, cancellationToken)));
 
-bff.MapGet("/events", async (HttpContext httpContext, RealtimeEventHub hub, CancellationToken cancellationToken) =>
+bff.MapGet("/events", async (
+    HttpContext httpContext,
+    RealtimeEventHub hub,
+    PrototypeRequestContextAccessor accessor,
+    CancellationToken cancellationToken) =>
 {
     httpContext.Response.Headers.CacheControl = "no-cache";
     httpContext.Response.Headers.Connection = "keep-alive";
     httpContext.Response.ContentType = "text/event-stream";
 
-    await using RealtimeSubscription subscription = hub.Subscribe();
+    await using RealtimeSubscription subscription = hub.Subscribe(accessor.Current.TenantId);
     await foreach (RealtimeEvent realtimeEvent in subscription.Reader.ReadAllAsync(cancellationToken))
     {
         await httpContext.Response.WriteAsync($"event: {realtimeEvent.EventType}\n", cancellationToken);

@@ -23,6 +23,7 @@
     <ProjectReference Include="..\..\..\src\backend\Modules\Tenancy\Domain\PurpleGlass.Modules.Tenancy.Domain.csproj" />
     <ProjectReference Include="..\..\..\src\backend\Modules\Tenancy\Application\PurpleGlass.Modules.Tenancy.Application.csproj" />
     <ProjectReference Include="..\..\..\src\backend\Modules\Audit\Domain\PurpleGlass.Modules.Audit.Domain.csproj" />
+    <ProjectReference Include="..\..\..\src\backend\Hosts\PurpleGlass.WebBff\PurpleGlass.WebBff.csproj" />
   </ItemGroup>
 
 </Project>
