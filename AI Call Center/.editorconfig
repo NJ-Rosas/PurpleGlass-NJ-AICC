@@ -25,5 +25,10 @@ indent_size = 2
 [*.md]
 trim_trailing_whitespace = false
 
+[**/Migrations/*.cs]
+generated_code = true
+dotnet_diagnostic.IDE0161.severity = none
+dotnet_diagnostic.CA1861.severity = none
+
 [Makefile]
 indent_style = tab

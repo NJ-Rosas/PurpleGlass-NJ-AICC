@@ -22,6 +22,11 @@
     <ProjectReference Include="..\..\..\src\backend\BuildingBlocks\PurpleGlass.Testing\PurpleGlass.Testing.csproj" />
     <ProjectReference Include="..\..\..\src\backend\Modules\Tenancy\Infrastructure\PurpleGlass.Modules.Tenancy.Infrastructure.csproj" />
     <ProjectReference Include="..\..\..\src\backend\BuildingBlocks\PurpleGlass.Eventing\PurpleGlass.Eventing.csproj" />
+    <ProjectReference Include="..\..\..\src\backend\BuildingBlocks\PurpleGlass.Eventing.Infrastructure\PurpleGlass.Eventing.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\..\src\backend\Modules\CallManagement\Application\PurpleGlass.Modules.CallManagement.Application.csproj" />
+    <ProjectReference Include="..\..\..\src\backend\Modules\CallManagement\Infrastructure\PurpleGlass.Modules.CallManagement.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\..\src\backend\Modules\Conversation\Application\PurpleGlass.Modules.Conversation.Application.csproj" />
+    <ProjectReference Include="..\..\..\src\backend\Modules\Conversation\Infrastructure\PurpleGlass.Modules.Conversation.Infrastructure.csproj" />
   </ItemGroup>
 
 </Project>

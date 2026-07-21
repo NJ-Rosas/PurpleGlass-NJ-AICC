@@ -58,6 +58,8 @@ public sealed class Conversation
 
     public DateTimeOffset? CompletedAtUtc { get; private set; }
 
+    public DateTimeOffset? FailedAtUtc { get; private set; }
+
     public ConversationSummary? Summary { get; private set; }
 
     public bool Escalated { get; private set; }
@@ -147,6 +149,7 @@ public sealed class Conversation
         }
 
         CompletedAtUtc = failedAtUtc;
+        FailedAtUtc = failedAtUtc;
         TransitionTo(ConversationState.Failed);
     }
 

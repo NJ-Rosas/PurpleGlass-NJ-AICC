@@ -27,6 +27,12 @@
     <ProjectReference Include="..\..\..\src\backend\Modules\Audit\Application\PurpleGlass.Modules.Audit.Application.csproj" />
     <ProjectReference Include="..\..\..\src\backend\Modules\CallManagement\Domain\PurpleGlass.Modules.CallManagement.Domain.csproj" />
     <ProjectReference Include="..\..\..\src\backend\Modules\Conversation\Domain\PurpleGlass.Modules.Conversation.Domain.csproj" />
+    <ProjectReference Include="..\..\..\src\backend\Modules\CallManagement\Application\PurpleGlass.Modules.CallManagement.Application.csproj" />
+    <ProjectReference Include="..\..\..\src\backend\Modules\CallManagement\Infrastructure\PurpleGlass.Modules.CallManagement.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\..\src\backend\Modules\CallManagement\Contracts\PurpleGlass.Modules.CallManagement.Contracts.csproj" />
+    <ProjectReference Include="..\..\..\src\backend\Modules\Conversation\Application\PurpleGlass.Modules.Conversation.Application.csproj" />
+    <ProjectReference Include="..\..\..\src\backend\Modules\Conversation\Infrastructure\PurpleGlass.Modules.Conversation.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\..\src\backend\Modules\Conversation\Contracts\PurpleGlass.Modules.Conversation.Contracts.csproj" />
   </ItemGroup>
 
 </Project>

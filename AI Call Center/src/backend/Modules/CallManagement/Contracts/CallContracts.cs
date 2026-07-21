@@ -24,6 +24,25 @@ public sealed record CallFailed(
     string Reason,
     DateTimeOffset FailedAtUtc);
 
+public sealed record OutboundCallRequested(
+    Guid CallId,
+    DateTimeOffset RequestedAtUtc);
+
+public sealed record CallEligibility(
+    Guid CallId,
+    Guid TenantId,
+    Guid LocationId,
+    string State,
+    bool ConversationAllowed);
+
+public interface ICallEligibilityQuery
+{
+    Task<CallEligibility?> GetEligibilityAsync(
+        Guid tenantId,
+        Guid callId,
+        CancellationToken cancellationToken);
+}
+
 public sealed record StartOutboundCallRequest(string DestinationNumber);
 
 public sealed record CallSummary(

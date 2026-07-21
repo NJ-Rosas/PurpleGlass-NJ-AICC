@@ -1,0 +1,3 @@
+namespace PurpleGlass.Modules.CallManagement.Infrastructure;
+
+public static class CallManagementInfrastructureAssembly;

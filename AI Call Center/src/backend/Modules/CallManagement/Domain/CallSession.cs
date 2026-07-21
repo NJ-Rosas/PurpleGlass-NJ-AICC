@@ -11,7 +11,7 @@ public sealed class CallSession
         TenantId tenantId,
         LocationId locationId,
         CallDirection direction,
-        string providerCallId,
+        string? providerCallId,
         string fromNumber,
         string toNumber,
         Guid correlationId,
@@ -31,7 +31,9 @@ public sealed class CallSession
         TenantId = tenantId;
         LocationId = locationId;
         Direction = direction;
-        ProviderCallId = RequireValue(providerCallId, nameof(providerCallId), 200);
+        ProviderCallId = direction == CallDirection.Inbound
+            ? RequireValue(providerCallId ?? string.Empty, nameof(providerCallId), 200)
+            : NormalizeOptional(providerCallId, nameof(providerCallId), 200);
         FromNumber = RequireValue(fromNumber, nameof(fromNumber), 32);
         ToNumber = RequireValue(toNumber, nameof(toNumber), 32);
         CorrelationId = correlationId == Guid.Empty ? Guid.NewGuid() : correlationId;
@@ -50,7 +52,7 @@ public sealed class CallSession
 
     public CallState State { get; private set; }
 
-    public string ProviderCallId { get; private set; } = string.Empty;
+    public string? ProviderCallId { get; private set; }
 
     public string FromNumber { get; private set; } = string.Empty;
 
@@ -64,11 +66,25 @@ public sealed class CallSession
 
     public DateTimeOffset? CompletedAtUtc { get; private set; }
 
+    public DateTimeOffset? FailedAtUtc { get; private set; }
+
     public string? Outcome { get; private set; }
 
     public string? RecordingReference { get; private set; }
 
     public DateTimeOffset? RecordingRetentionEligibleAtUtc { get; private set; }
+
+    public string? RecordingStorageProvider { get; private set; }
+
+    public string? RecordingContentType { get; private set; }
+
+    public long? RecordingDurationMilliseconds { get; private set; }
+
+    public DateTimeOffset? RecordedAtUtc { get; private set; }
+
+    public string? RecordingChecksum { get; private set; }
+
+    public long? RecordingSizeBytes { get; private set; }
 
     public long Version { get; private set; }
 
@@ -76,7 +92,7 @@ public sealed class CallSession
         CallSessionId id,
         TenantId tenantId,
         LocationId locationId,
-        string providerCallId,
+        string? providerCallId,
         string fromNumber,
         string toNumber,
         Guid correlationId,
@@ -87,7 +103,7 @@ public sealed class CallSession
         CallSessionId id,
         TenantId tenantId,
         LocationId locationId,
-        string providerCallId,
+        string? providerCallId,
         string fromNumber,
         string toNumber,
         Guid correlationId,
@@ -138,18 +154,37 @@ public sealed class CallSession
 
         Outcome = RequireValue(outcome, nameof(outcome), 100);
         CompletedAtUtc = failedAtUtc;
+        FailedAtUtc = failedAtUtc;
         TransitionTo(CallState.Failed);
     }
 
     public void AttachRecording(string recordingReference, DateTimeOffset retentionEligibleAtUtc)
+        => AttachRecording(new RecordingMetadata(
+            "prototype",
+            recordingReference,
+            "application/octet-stream",
+            null,
+            retentionEligibleAtUtc,
+            retentionEligibleAtUtc,
+            null,
+            null));
+
+    public void AttachRecording(RecordingMetadata recording)
     {
+        ArgumentNullException.ThrowIfNull(recording);
         if (State is not (CallState.Completed or CallState.Failed))
         {
             throw new InvalidOperationException("A recording can be attached only after the call ends.");
         }
 
-        RecordingReference = RequireValue(recordingReference, nameof(recordingReference), 500);
-        RecordingRetentionEligibleAtUtc = retentionEligibleAtUtc;
+        RecordingReference = recording.ObjectReference;
+        RecordingRetentionEligibleAtUtc = recording.RetentionEligibleAtUtc;
+        RecordingStorageProvider = recording.StorageProvider;
+        RecordingContentType = recording.ContentType;
+        RecordingDurationMilliseconds = recording.DurationMilliseconds;
+        RecordedAtUtc = recording.RecordedAtUtc;
+        RecordingChecksum = recording.Checksum;
+        RecordingSizeBytes = recording.SizeBytes;
         Version++;
     }
 
@@ -176,6 +211,27 @@ public sealed class CallSession
         if (normalized.Length is 0 || normalized.Length > maximumLength)
         {
             throw new ArgumentException($"Value must contain between 1 and {maximumLength} characters.", parameterName);
+        }
+
+        return normalized;
+    }
+
+    private static string? NormalizeOptional(string? value, string parameterName, int maximumLength)
+    {
+        if (value is null)
+        {
+            return null;
+        }
+
+        string normalized = value.Trim();
+        if (normalized.Length == 0)
+        {
+            return null;
+        }
+
+        if (normalized.Length > maximumLength)
+        {
+            throw new ArgumentException($"Value cannot exceed {maximumLength} characters.", parameterName);
         }
 
         return normalized;

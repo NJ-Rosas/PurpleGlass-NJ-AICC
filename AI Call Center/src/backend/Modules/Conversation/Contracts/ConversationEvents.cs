@@ -39,3 +39,5 @@ public sealed record SummaryGenerated(
     DateTimeOffset GeneratedAtUtc);
 
 public sealed record ConversationCompleted(Guid ConversationId, DateTimeOffset CompletedAtUtc);
+
+public sealed record ConversationFailed(Guid ConversationId, DateTimeOffset FailedAtUtc);

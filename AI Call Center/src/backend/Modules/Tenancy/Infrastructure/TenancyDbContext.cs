@@ -107,6 +107,14 @@ public sealed class TenancyDbContext(DbContextOptions<TenancyDbContext> options)
         outbox.Property(message => message.MessageType).HasMaxLength(200).IsRequired();
         outbox.Property(message => message.Payload).HasColumnType("jsonb").IsRequired();
         outbox.Property(message => message.LastError).HasMaxLength(1_000);
+        outbox.Ignore(message => message.SchemaVersion);
+        outbox.Ignore(message => message.CausationId);
+        outbox.Ignore(message => message.TraceId);
+        outbox.Ignore(message => message.Producer);
+        outbox.Ignore(message => message.DataClassification);
+        outbox.Ignore(message => message.Status);
+        outbox.Ignore(message => message.CreatedAtUtc);
+        outbox.Ignore(message => message.NextAttemptAtUtc);
         outbox.HasIndex(message => new { message.PublishedAtUtc, message.OccurredAtUtc });
     }
 }

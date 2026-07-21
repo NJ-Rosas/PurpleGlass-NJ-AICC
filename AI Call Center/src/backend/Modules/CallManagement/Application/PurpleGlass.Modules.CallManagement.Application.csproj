@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\BuildingBlocks\PurpleGlass.Eventing\PurpleGlass.Eventing.csproj" />
+    <ProjectReference Include="..\Contracts\PurpleGlass.Modules.CallManagement.Contracts.csproj" />
+    <ProjectReference Include="..\Domain\PurpleGlass.Modules.CallManagement.Domain.csproj" />
+  </ItemGroup>
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+</Project>
