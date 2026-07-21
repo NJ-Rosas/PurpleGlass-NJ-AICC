@@ -25,6 +25,8 @@
     <ProjectReference Include="..\..\..\src\backend\Modules\Tenancy\Presentation\PurpleGlass.Modules.Tenancy.Presentation.csproj" />
     <ProjectReference Include="..\..\..\src\backend\Modules\Audit\Domain\PurpleGlass.Modules.Audit.Domain.csproj" />
     <ProjectReference Include="..\..\..\src\backend\Modules\Audit\Application\PurpleGlass.Modules.Audit.Application.csproj" />
+    <ProjectReference Include="..\..\..\src\backend\Modules\CallManagement\Domain\PurpleGlass.Modules.CallManagement.Domain.csproj" />
+    <ProjectReference Include="..\..\..\src\backend\Modules\Conversation\Domain\PurpleGlass.Modules.Conversation.Domain.csproj" />
   </ItemGroup>
 
 </Project>

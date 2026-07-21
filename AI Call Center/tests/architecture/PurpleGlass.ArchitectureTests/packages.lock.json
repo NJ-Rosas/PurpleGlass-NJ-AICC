@@ -231,6 +231,18 @@
           "PurpleGlass.Observability": "[1.0.0, )"
         }
       },
+      "purpleglass.modules.callmanagement.domain": {
+        "type": "Project",
+        "dependencies": {
+          "PurpleGlass.SharedKernel": "[1.0.0, )"
+        }
+      },
+      "purpleglass.modules.conversation.domain": {
+        "type": "Project",
+        "dependencies": {
+          "PurpleGlass.SharedKernel": "[1.0.0, )"
+        }
+      },
       "purpleglass.modules.tenancy.application": {
         "type": "Project",
         "dependencies": {

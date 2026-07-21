@@ -1,6 +1,8 @@
 using System.Reflection;
 using PurpleGlass.Modules.Audit.Application;
 using PurpleGlass.Modules.Audit.Domain;
+using PurpleGlass.Modules.CallManagement.Domain;
+using PurpleGlass.Modules.Conversation.Domain;
 using PurpleGlass.Modules.Tenancy.Application;
 using PurpleGlass.Modules.Tenancy.Domain;
 
@@ -12,6 +14,8 @@ public sealed class LayerDependencyTests
     [
         typeof(TenancyDomainAssembly).Assembly,
         typeof(AuditDomainAssembly).Assembly,
+        typeof(CallManagementDomainAssembly).Assembly,
+        typeof(ConversationDomainAssembly).Assembly,
     ];
 
     private static readonly Assembly[] ApplicationAssemblies =
