@@ -190,10 +190,34 @@
           "xunit.extensibility.core": "[2.9.3]"
         }
       },
+      "purpleglass.adapters.ai.mock": {
+        "type": "Project",
+        "dependencies": {
+          "PurpleGlass.Modules.Conversation.Application": "[1.0.0, )"
+        }
+      },
+      "purpleglass.adapters.speech.mock": {
+        "type": "Project",
+        "dependencies": {
+          "PurpleGlass.Modules.Conversation.Application": "[1.0.0, )"
+        }
+      },
       "purpleglass.application.abstractions": {
         "type": "Project",
         "dependencies": {
           "PurpleGlass.SharedKernel": "[1.0.0, )"
+        }
+      },
+      "purpleglass.callorchestrator.worker": {
+        "type": "Project",
+        "dependencies": {
+          "PurpleGlass.Adapters.AI.Mock": "[1.0.0, )",
+          "PurpleGlass.Adapters.Speech.Mock": "[1.0.0, )",
+          "PurpleGlass.Modules.CallManagement.Application": "[1.0.0, )",
+          "PurpleGlass.Modules.CallManagement.Infrastructure": "[1.0.0, )",
+          "PurpleGlass.Modules.Conversation.Application": "[1.0.0, )",
+          "PurpleGlass.Modules.Conversation.Infrastructure": "[1.0.0, )",
+          "PurpleGlass.Observability": "[1.0.0, )"
         }
       },
       "purpleglass.eventing": {
@@ -248,6 +272,16 @@
           "PurpleGlass.SharedKernel": "[1.0.0, )"
         }
       },
+      "purpleglass.modules.callmanagement.infrastructure": {
+        "type": "Project",
+        "dependencies": {
+          "Microsoft.EntityFrameworkCore": "[10.0.10, )",
+          "Npgsql.EntityFrameworkCore.PostgreSQL": "[10.0.0, )",
+          "PurpleGlass.Eventing": "[1.0.0, )",
+          "PurpleGlass.Modules.CallManagement.Application": "[1.0.0, )",
+          "PurpleGlass.Modules.CallManagement.Domain": "[1.0.0, )"
+        }
+      },
       "purpleglass.modules.conversation.application": {
         "type": "Project",
         "dependencies": {
@@ -264,6 +298,16 @@
         "type": "Project",
         "dependencies": {
           "PurpleGlass.SharedKernel": "[1.0.0, )"
+        }
+      },
+      "purpleglass.modules.conversation.infrastructure": {
+        "type": "Project",
+        "dependencies": {
+          "Microsoft.EntityFrameworkCore": "[10.0.10, )",
+          "Npgsql.EntityFrameworkCore.PostgreSQL": "[10.0.0, )",
+          "PurpleGlass.Eventing": "[1.0.0, )",
+          "PurpleGlass.Modules.Conversation.Application": "[1.0.0, )",
+          "PurpleGlass.Modules.Conversation.Domain": "[1.0.0, )"
         }
       },
       "purpleglass.modules.tenancy.application": {

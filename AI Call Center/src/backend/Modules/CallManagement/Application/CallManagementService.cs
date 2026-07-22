@@ -20,7 +20,7 @@ public sealed class CallManagementService(ICallStore store, TimeProvider timePro
             CallSessionId.New(), new TenantId(command.TenantId), new LocationId(command.LocationId),
             command.ProviderCallId, command.FromNumber, command.ToNumber, command.CorrelationId, now);
         store.Add(call);
-        AddEvent(call, new CallReceived(call.Id.Value, "Inbound", now), nameof(CallReceived), now);
+        AddEvent(call, new CallReceived(call.Id.Value, "Inbound", now), nameof(CallReceived), now, command.CausationId, command.TraceId);
         await SaveAsync(cancellationToken);
         return Map(call);
     }
@@ -44,7 +44,7 @@ public sealed class CallManagementService(ICallStore store, TimeProvider timePro
             null, command.FromNumber, command.ToNumber, command.CorrelationId, now);
         store.Add(call);
         store.AddOutboundRequest(command.TenantId, RequireKey(command.IdempotencyKey), call.Id.Value, now);
-        AddEvent(call, new OutboundCallRequested(call.Id.Value, now), nameof(OutboundCallRequested), now);
+        AddEvent(call, new OutboundCallRequested(call.Id.Value, now), nameof(OutboundCallRequested), now, command.CausationId, command.TraceId);
         await SaveAsync(cancellationToken);
         return Map(call);
     }
@@ -66,8 +66,8 @@ public sealed class CallManagementService(ICallStore store, TimeProvider timePro
         CallState previous = call.State;
         DateTimeOffset now = timeProvider.GetUtcNow();
         Apply(() => call.Complete(command.Outcome, now));
-        AddEvent(call, new CallStateChanged(call.Id.Value, previous.ToString(), call.State.ToString(), call.Version), nameof(CallStateChanged), now);
-        AddEvent(call, new CallCompleted(call.Id.Value, call.Outcome!, now, call.RecordingReference), nameof(CallCompleted), now);
+        AddEvent(call, new CallStateChanged(call.Id.Value, previous.ToString(), call.State.ToString(), call.Version), nameof(CallStateChanged), now, command.CausationId, command.TraceId);
+        AddEvent(call, new CallCompleted(call.Id.Value, call.Outcome!, now, call.RecordingReference), nameof(CallCompleted), now, command.CausationId, command.TraceId);
         await SaveAsync(cancellationToken);
         return Map(call);
     }
@@ -80,8 +80,8 @@ public sealed class CallManagementService(ICallStore store, TimeProvider timePro
         CallState previous = call.State;
         DateTimeOffset now = timeProvider.GetUtcNow();
         Apply(() => call.Fail(command.Reason, now));
-        AddEvent(call, new CallStateChanged(call.Id.Value, previous.ToString(), call.State.ToString(), call.Version), nameof(CallStateChanged), now);
-        AddEvent(call, new CallFailed(call.Id.Value, call.Outcome!, now), nameof(CallFailed), now);
+        AddEvent(call, new CallStateChanged(call.Id.Value, previous.ToString(), call.State.ToString(), call.Version), nameof(CallStateChanged), now, command.CausationId, command.TraceId);
+        AddEvent(call, new CallFailed(call.Id.Value, call.Outcome!, now), nameof(CallFailed), now, command.CausationId, command.TraceId);
         await SaveAsync(cancellationToken);
         return Map(call);
     }
@@ -122,9 +122,9 @@ public sealed class CallManagementService(ICallStore store, TimeProvider timePro
         Apply(() => transition(call));
         if (target == CallState.Answered)
         {
-            AddEvent(call, new CallAnswered(call.Id.Value, call.AnsweredAtUtc!.Value), nameof(CallAnswered), now);
+            AddEvent(call, new CallAnswered(call.Id.Value, call.AnsweredAtUtc!.Value), nameof(CallAnswered), now, command.CausationId, command.TraceId);
         }
-        AddEvent(call, new CallStateChanged(call.Id.Value, previous.ToString(), call.State.ToString(), call.Version), nameof(CallStateChanged), now);
+        AddEvent(call, new CallStateChanged(call.Id.Value, previous.ToString(), call.State.ToString(), call.Version), nameof(CallStateChanged), now, command.CausationId, command.TraceId);
         await SaveAsync(cancellationToken);
         return Map(call);
     }
@@ -137,10 +137,11 @@ public sealed class CallManagementService(ICallStore store, TimeProvider timePro
         if (call.Version != expectedVersion) throw CallApplicationException.Concurrency();
     }
 
-    private void AddEvent<T>(CallSession call, T payload, string type, DateTimeOffset now) => store.AddOutbox(OutboxMessage.Create(
+    private void AddEvent<T>(CallSession call, T payload, string type, DateTimeOffset now, Guid? causationId, string? traceId) => store.AddOutbox(OutboxMessage.Create(
         call.TenantId.Value, call.LocationId.Value,
         $"pg/local/v1/tenants/{call.TenantId.Value:D}/calls/{call.Id.Value:D}/events/{ToTopic(type)}",
-        type, JsonSerializer.Serialize(payload), call.CorrelationId, now, producer: "call-management"));
+        type, JsonSerializer.Serialize(payload), call.CorrelationId, now,
+        causationId: causationId, traceId: traceId, producer: "call-management"));
 
     private async Task SaveAsync(CancellationToken cancellationToken)
     {

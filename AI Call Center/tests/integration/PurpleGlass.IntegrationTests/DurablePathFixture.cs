@@ -7,7 +7,7 @@ using PurpleGlass.Modules.Tenancy.Infrastructure;
 
 namespace PurpleGlass.IntegrationTests;
 
-public sealed class DurablePathFixture : IAsyncLifetime
+public class DurablePathFixture : IAsyncLifetime
 {
     private readonly string databaseName = $"purpleglass_task3_{Guid.NewGuid():N}";
     private const string AdminConnection = "Host=localhost;Port=5433;Database=postgres;Username=purpleglass;Password=purpleglass_dev_only";

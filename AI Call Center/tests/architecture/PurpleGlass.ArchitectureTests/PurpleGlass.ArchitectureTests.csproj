@@ -33,6 +33,10 @@
     <ProjectReference Include="..\..\..\src\backend\Modules\Conversation\Application\PurpleGlass.Modules.Conversation.Application.csproj" />
     <ProjectReference Include="..\..\..\src\backend\Modules\Conversation\Infrastructure\PurpleGlass.Modules.Conversation.Infrastructure.csproj" />
     <ProjectReference Include="..\..\..\src\backend\Modules\Conversation\Contracts\PurpleGlass.Modules.Conversation.Contracts.csproj" />
+    <ProjectReference Include="..\..\..\src\backend\Adapters\AI\PurpleGlass.Adapters.AI.Mock\PurpleGlass.Adapters.AI.Mock.csproj" />
+    <ProjectReference Include="..\..\..\src\backend\Adapters\Speech\PurpleGlass.Adapters.Speech.Mock\PurpleGlass.Adapters.Speech.Mock.csproj" />
+    <ProjectReference Include="..\..\..\src\backend\Hosts\PurpleGlass.CallOrchestrator.Worker\PurpleGlass.CallOrchestrator.Worker.csproj" />
+    <ProjectReference Include="..\..\..\samples\PurpleGlass.CallSimulator\PurpleGlass.CallSimulator.csproj" />
   </ItemGroup>
 
 </Project>

@@ -42,7 +42,7 @@ public sealed class ConversationService(IConversationStore store, ICallEligibili
         DateTimeOffset now = timeProvider.GetUtcNow();
         Apply(() => conversation.Activate(now));
         AddEvent(conversation, new ConversationStarted(conversation.Id.Value, conversation.CallSession.Value,
-            conversation.Language, conversation.ConfigurationVersion, now), nameof(ConversationStarted), now);
+            conversation.Language, conversation.ConfigurationVersion, now), nameof(ConversationStarted), now, command.CausationId, command.TraceId);
         await SaveAsync(cancellationToken);
         return Status(conversation);
     }
@@ -59,7 +59,7 @@ public sealed class ConversationService(IConversationStore store, ICallEligibili
         if (conversation.Escalated && conversation.EscalationReason == command.Reason.Trim()) return Status(conversation);
         DateTimeOffset now = timeProvider.GetUtcNow();
         Apply(() => conversation.RecordEscalation(command.Reason));
-        AddEvent(conversation, new EscalationTriggered(conversation.Id.Value, conversation.EscalationReason!, now), nameof(EscalationTriggered), now);
+        AddEvent(conversation, new EscalationTriggered(conversation.Id.Value, conversation.EscalationReason!, now), nameof(EscalationTriggered), now, command.CausationId, command.TraceId);
         await SaveAsync(cancellationToken);
         return Status(conversation);
     }
@@ -74,8 +74,8 @@ public sealed class ConversationService(IConversationStore store, ICallEligibili
         Apply(() => conversation.Complete(command.Summary, now));
         AddEvent(conversation, new SummaryGenerated(conversation.Id.Value, command.Summary.Text, command.Summary.CallerIntent,
             command.Summary.Outcome, command.Summary.FollowUpRequired, command.Summary.Escalated,
-            command.Summary.ConfigurationVersion, command.Summary.GeneratedAtUtc), nameof(SummaryGenerated), now);
-        AddEvent(conversation, new ConversationCompleted(conversation.Id.Value, now), nameof(ConversationCompleted), now);
+            command.Summary.ConfigurationVersion, command.Summary.GeneratedAtUtc), nameof(SummaryGenerated), now, command.CausationId, command.TraceId);
+        AddEvent(conversation, new ConversationCompleted(conversation.Id.Value, now), nameof(ConversationCompleted), now, command.CausationId, command.TraceId);
         await SaveAsync(cancellationToken);
         return Completed(conversation);
     }
@@ -87,7 +87,7 @@ public sealed class ConversationService(IConversationStore store, ICallEligibili
         EnsureVersion(conversation, command.ExpectedVersion);
         DateTimeOffset now = timeProvider.GetUtcNow();
         Apply(() => conversation.Fail(now));
-        AddEvent(conversation, new ConversationFailed(conversation.Id.Value, now), nameof(ConversationFailed), now);
+        AddEvent(conversation, new ConversationFailed(conversation.Id.Value, now), nameof(ConversationFailed), now, command.CausationId, command.TraceId);
         await SaveAsync(cancellationToken);
         return Status(conversation);
     }
@@ -123,7 +123,7 @@ public sealed class ConversationService(IConversationStore store, ICallEligibili
         object payload = speaker == SpeakerRole.Caller
             ? new UserSpeechRecognized(conversation.Id.Value, turn.Id.Value, turn.SequenceNumber, turn.Text, turn.RecognitionConfidence, now)
             : new AIResponseGenerated(conversation.Id.Value, turn.Id.Value, turn.SequenceNumber, turn.Text, conversation.ConfigurationVersion, now);
-        AddEvent(conversation, payload, payload.GetType().Name, now);
+        AddEvent(conversation, payload, payload.GetType().Name, now, command.CausationId, command.TraceId);
         await SaveAsync(cancellationToken);
         return Turn(turn, conversation.CallSession.Value);
     }
@@ -133,10 +133,11 @@ public sealed class ConversationService(IConversationStore store, ICallEligibili
     private async Task<ConversationAggregate> LoadForChange(Guid tenantId, Guid id, long expected, CancellationToken cancellationToken)
     { ConversationAggregate conversation = await store.GetAsync(tenantId, id, true, cancellationToken) ?? throw ConversationApplicationException.NotFound(); EnsureVersion(conversation, expected); return conversation; }
     private static void EnsureVersion(ConversationAggregate conversation, long expected) { if (conversation.Version != expected) throw ConversationApplicationException.Concurrency(); }
-    private void AddEvent<T>(ConversationAggregate conversation, T payload, string type, DateTimeOffset now) => store.AddOutbox(OutboxMessage.Create(
+    private void AddEvent<T>(ConversationAggregate conversation, T payload, string type, DateTimeOffset now, Guid? causationId, string? traceId) => store.AddOutbox(OutboxMessage.Create(
         conversation.TenantId.Value, conversation.LocationId.Value,
         $"pg/local/v1/tenants/{conversation.TenantId.Value:D}/calls/{conversation.CallSession.Value:D}/events/{ToTopic(type)}",
-        type, JsonSerializer.Serialize(payload), conversation.CorrelationId.Value, now, producer: "conversation"));
+        type, JsonSerializer.Serialize(payload), conversation.CorrelationId.Value, now,
+        causationId: causationId, traceId: traceId, producer: "conversation"));
     private async Task SaveAsync(CancellationToken cancellationToken) { try { await store.SaveChangesAsync(cancellationToken); } catch (ConversationPersistenceConcurrencyException e) { throw ConversationApplicationException.Concurrency(e); } }
     private static void Apply(Action action) { try { action(); } catch (InvalidOperationException e) { throw ConversationApplicationException.InvalidState(e); } }
     private static string ToTopic(string value) => string.Concat(value.Select((c, i) => char.IsUpper(c) && i > 0 ? $"-{char.ToLowerInvariant(c)}" : char.ToLowerInvariant(c).ToString()));

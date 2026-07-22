@@ -8,7 +8,9 @@ public sealed record RegisterInboundCall(
     string ProviderCallId,
     string FromNumber,
     string ToNumber,
-    Guid CorrelationId);
+    Guid CorrelationId,
+    Guid? CausationId = null,
+    string? TraceId = null);
 
 public sealed record RequestOutboundCall(
     Guid TenantId,
@@ -16,24 +18,37 @@ public sealed record RequestOutboundCall(
     string IdempotencyKey,
     string FromNumber,
     string ToNumber,
-    Guid CorrelationId);
+    Guid CorrelationId,
+    Guid? CausationId = null,
+    string? TraceId = null);
 
-public sealed record ChangeCallState(Guid TenantId, Guid CallId, long ExpectedVersion);
+public sealed record ChangeCallState(
+    Guid TenantId,
+    Guid CallId,
+    long ExpectedVersion,
+    Guid? CausationId = null,
+    string? TraceId = null);
 
 public sealed record CompleteCall(
     Guid TenantId,
     Guid CallId,
     long ExpectedVersion,
-    string Outcome);
+    string Outcome,
+    Guid? CausationId = null,
+    string? TraceId = null);
 
 public sealed record FailCall(
     Guid TenantId,
     Guid CallId,
     long ExpectedVersion,
-    string Reason);
+    string Reason,
+    Guid? CausationId = null,
+    string? TraceId = null);
 
 public sealed record AttachCallRecording(
     Guid TenantId,
     Guid CallId,
     long ExpectedVersion,
-    RecordingMetadata Recording);
+    RecordingMetadata Recording,
+    Guid? CausationId = null,
+    string? TraceId = null);
