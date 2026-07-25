@@ -27,7 +27,8 @@ The prototype uses synthetic tenants and locations only.
 5. [Testing, Acceptance, and Demo](./05_TESTING_ACCEPTANCE_AND_DEMO.md)
 6. [Prototype Backlog](./06_PROTOTYPE_BACKLOG.md)
 7. [Implementation Status](./07_IMPLEMENTATION_STATUS.md)
-8. [Local Prototype Runbook](../runbooks/LOCAL_PROTOTYPE.md)
+8. [Project Handoff and Next Steps](./08_PROJECT_HANDOFF_AND_NEXT_STEPS.md)
+9. [Local Prototype Runbook](../runbooks/LOCAL_PROTOTYPE.md)
 
 ## How to use the series
 
