@@ -115,6 +115,8 @@ public sealed class TenancyDbContext(DbContextOptions<TenancyDbContext> options)
         outbox.Ignore(message => message.Status);
         outbox.Ignore(message => message.CreatedAtUtc);
         outbox.Ignore(message => message.NextAttemptAtUtc);
+        outbox.Ignore(message => message.LeaseId);
+        outbox.Ignore(message => message.LeaseExpiresAtUtc);
         outbox.HasIndex(message => new { message.PublishedAtUtc, message.OccurredAtUtc });
     }
 }

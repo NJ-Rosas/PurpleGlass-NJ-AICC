@@ -88,6 +88,8 @@ public sealed class ConversationDbContext(DbContextOptions<ConversationDbContext
     private static void ConfigureOutbox(EntityTypeBuilder<OutboxMessage> outbox)
     {
         outbox.ToTable("outbox_messages", "eventing", table => table.ExcludeFromMigrations());
+        outbox.Ignore(entity => entity.LeaseId);
+        outbox.Ignore(entity => entity.LeaseExpiresAtUtc);
         outbox.HasKey(entity => entity.Id);
         outbox.Property(entity => entity.Topic).HasMaxLength(500).IsRequired();
         outbox.Property(entity => entity.MessageType).HasMaxLength(200).IsRequired();

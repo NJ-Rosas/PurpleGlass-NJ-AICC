@@ -344,63 +344,12 @@
           "PurpleGlass.SharedKernel": "[1.0.0, )"
         }
       },
-      "purpleglass.modules.audit.application": {
-        "type": "Project",
-        "dependencies": {
-          "PurpleGlass.Application.Abstractions": "[1.0.0, )",
-          "PurpleGlass.Modules.Audit.Contracts": "[1.0.0, )",
-          "PurpleGlass.Modules.Audit.Domain": "[1.0.0, )"
-        }
-      },
-      "purpleglass.modules.audit.contracts": {
-        "type": "Project"
-      },
-      "purpleglass.modules.audit.domain": {
-        "type": "Project",
-        "dependencies": {
-          "PurpleGlass.SharedKernel": "[1.0.0, )"
-        }
-      },
-      "purpleglass.modules.audit.infrastructure": {
-        "type": "Project",
-        "dependencies": {
-          "Microsoft.EntityFrameworkCore": "[10.0.10, )",
-          "Microsoft.EntityFrameworkCore.Relational": "[10.0.10, )",
-          "PurpleGlass.Eventing": "[1.0.0, )",
-          "PurpleGlass.Modules.Audit.Application": "[1.0.0, )",
-          "PurpleGlass.Modules.Audit.Domain": "[1.0.0, )",
-          "PurpleGlass.Observability": "[1.0.0, )"
-        }
-      },
-      "purpleglass.modules.tenancy.application": {
-        "type": "Project",
-        "dependencies": {
-          "PurpleGlass.Application.Abstractions": "[1.0.0, )",
-          "PurpleGlass.Eventing": "[1.0.0, )",
-          "PurpleGlass.Modules.Audit.Application": "[1.0.0, )",
-          "PurpleGlass.Modules.Tenancy.Contracts": "[1.0.0, )",
-          "PurpleGlass.Modules.Tenancy.Domain": "[1.0.0, )"
-        }
-      },
-      "purpleglass.modules.tenancy.contracts": {
-        "type": "Project"
-      },
-      "purpleglass.modules.tenancy.domain": {
-        "type": "Project",
-        "dependencies": {
-          "PurpleGlass.SharedKernel": "[1.0.0, )"
-        }
-      },
-      "purpleglass.modules.tenancy.infrastructure": {
+      "purpleglass.eventing.infrastructure": {
         "type": "Project",
         "dependencies": {
           "Microsoft.EntityFrameworkCore": "[10.0.10, )",
           "Npgsql.EntityFrameworkCore.PostgreSQL": "[10.0.0, )",
-          "PurpleGlass.Eventing": "[1.0.0, )",
-          "PurpleGlass.Modules.Audit.Infrastructure": "[1.0.0, )",
-          "PurpleGlass.Modules.Tenancy.Application": "[1.0.0, )",
-          "PurpleGlass.Modules.Tenancy.Domain": "[1.0.0, )",
-          "PurpleGlass.Observability": "[1.0.0, )"
+          "PurpleGlass.Eventing": "[1.0.0, )"
         }
       },
       "purpleglass.observability": {

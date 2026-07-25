@@ -7,8 +7,13 @@ namespace PurpleGlass.Eventing.Infrastructure;
 public sealed class EventingDbContext(DbContextOptions<EventingDbContext> options) : DbContext(options)
 {
     public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
+    public DbSet<InboxMessage> InboxMessages => Set<InboxMessage>();
 
-    protected override void OnModelCreating(ModelBuilder modelBuilder) => Configure(modelBuilder.Entity<OutboxMessage>());
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        Configure(modelBuilder.Entity<OutboxMessage>());
+        Configure(modelBuilder.Entity<InboxMessage>());
+    }
 
     public static void Configure(EntityTypeBuilder<OutboxMessage> outbox)
     {
@@ -22,7 +27,16 @@ public sealed class EventingDbContext(DbContextOptions<EventingDbContext> option
         outbox.Property(entity => entity.Status).HasMaxLength(30).IsRequired();
         outbox.Property(entity => entity.TraceId).HasMaxLength(100);
         outbox.Property(entity => entity.LastError).HasMaxLength(1_000);
-        outbox.HasIndex(entity => new { entity.Status, entity.NextAttemptAtUtc, entity.OccurredAtUtc });
+        outbox.HasIndex(entity => new { entity.Status, entity.NextAttemptAtUtc, entity.LeaseExpiresAtUtc, entity.OccurredAtUtc });
         outbox.HasIndex(entity => new { entity.TenantId, entity.OccurredAtUtc });
+    }
+
+    public static void Configure(EntityTypeBuilder<InboxMessage> inbox)
+    {
+        inbox.ToTable("inbox_messages", "eventing");
+        inbox.HasKey(entity => entity.Id);
+        inbox.Property(entity => entity.ConsumerName).HasMaxLength(150).IsRequired();
+        inbox.HasIndex(entity => new { entity.ConsumerName, entity.MessageId }).IsUnique();
+        inbox.HasIndex(entity => new { entity.TenantId, entity.ReceivedAtUtc });
     }
 }

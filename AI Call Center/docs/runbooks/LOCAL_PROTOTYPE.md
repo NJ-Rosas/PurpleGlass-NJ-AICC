@@ -14,6 +14,28 @@ npm ci --prefix src/frontend
 
 The migrations host applies pending EF Core migrations and seeds one deterministic synthetic dental tenant and location.
 
+## Event delivery reliability
+
+The integrations worker claims bounded outbox batches with PostgreSQL row locks and expiring leases. Multiple worker instances skip rows already claimed by another instance. An expired lease is recoverable after a worker crash.
+
+Failed publishes return to `Pending` with exponential backoff. After the configured maximum attempts, the message moves to `DeadLetter` and is no longer selected automatically. Successful delivery clears lease and error state and records `PublishedAtUtc`.
+
+The `OutboxPublisher` configuration section controls batch size, maximum attempts, lease duration, initial and maximum message retry delays, polling interval, and the delay after infrastructure failures. Environment-variable overrides use the normal double-underscore convention, such as:
+
+```bash
+OutboxPublisher__MaximumAttempts=5 dotnet run --project src/backend/Hosts/PurpleGlass.Integrations.Worker/PurpleGlass.Integrations.Worker.csproj
+```
+
+Inspect synthetic local delivery state:
+
+```bash
+docker exec purpleglass-prototype-postgres-1 \
+  psql -U purpleglass -d purpleglass \
+  -c 'SELECT "Status", count(*) FROM eventing.outbox_messages GROUP BY "Status" ORDER BY "Status";'
+```
+
+The Eventing infrastructure also owns `eventing.inbox_messages`. Consumers use `InboxDeduplicationStore.ExecuteOnceAsync` with a stable consumer name and message ID. The handler runs before the inbox transaction commits: duplicates skip the handler, and a failed handler rolls back the receipt so delivery can be retried. Database projection changes should enlist in the same transaction; external side effects must still be independently idempotent.
+
 ## Simulated AI calls
 
 Task 4 runs the provider-neutral call pipeline locally without telephony, paid AI, or paid speech providers. Start PostgreSQL and apply migrations first:

@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using PurpleGlass.Eventing;
+using PurpleGlass.Eventing.Infrastructure;
 using PurpleGlass.Modules.CallManagement.Application;
 using PurpleGlass.Modules.CallManagement.Contracts;
 using PurpleGlass.Modules.CallManagement.Domain;
@@ -38,6 +39,141 @@ public sealed class DurablePathTests(DurablePathFixture fixture)
             Assert.Equal(1, await context.Calls.CountAsync(entity => entity.TenantId == new PurpleGlass.Modules.CallManagement.Domain.TenantId(tenant)));
             Assert.Equal(1, await context.OutboxMessages.CountAsync(entity => entity.MessageType == nameof(CallReceived)));
         }
+    }
+
+    [Fact]
+    public async Task OutboxClaimsAreExclusiveAndExpiredLeasesAreRecoverable()
+    {
+        DateTimeOffset now = DateTimeOffset.UtcNow.AddYears(-10);
+        OutboxMessage message = OutboxMessage.Create(
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            $"pg/local/v1/tenants/{Guid.NewGuid():D}/events/lease-test",
+            "LeaseTest",
+            "{}",
+            Guid.NewGuid(),
+            now);
+        await using (EventingDbContext seed = fixture.CreateEventing())
+        {
+            seed.OutboxMessages.Add(message);
+            _ = await seed.SaveChangesAsync();
+        }
+
+        Guid firstLease = Guid.NewGuid();
+        await using (EventingDbContext firstContext = fixture.CreateEventing())
+        {
+            var firstStore = new OutboxDispatcherStore(firstContext);
+            IReadOnlyList<OutboxMessage> claimed = await firstStore.ClaimBatchAsync(
+                firstLease,
+                now,
+                TimeSpan.FromSeconds(30),
+                10,
+                default);
+            Assert.Contains(claimed, candidate => candidate.Id == message.Id);
+        }
+
+        await using (EventingDbContext blockedContext = fixture.CreateEventing())
+        {
+            var blockedStore = new OutboxDispatcherStore(blockedContext);
+            IReadOnlyList<OutboxMessage> blocked = await blockedStore.ClaimBatchAsync(
+                Guid.NewGuid(),
+                now.AddSeconds(10),
+                TimeSpan.FromSeconds(30),
+                10,
+                default);
+            Assert.DoesNotContain(blocked, candidate => candidate.Id == message.Id);
+        }
+
+        Guid recoveryLease = Guid.NewGuid();
+        await using (EventingDbContext recoveryContext = fixture.CreateEventing())
+        {
+            var recoveryStore = new OutboxDispatcherStore(recoveryContext);
+            IReadOnlyList<OutboxMessage> recovered = await recoveryStore.ClaimBatchAsync(
+                recoveryLease,
+                now.AddMinutes(1),
+                TimeSpan.FromSeconds(30),
+                10,
+                default);
+            OutboxMessage recoveredMessage = Assert.Single(recovered, candidate => candidate.Id == message.Id);
+            await recoveryStore.MarkPublishedAsync(
+                recoveredMessage,
+                recoveryLease,
+                now.AddMinutes(1),
+                default);
+        }
+
+        await using EventingDbContext verify = fixture.CreateEventing();
+        OutboxMessage persisted = await verify.OutboxMessages.SingleAsync(candidate => candidate.Id == message.Id);
+        Assert.Equal(OutboxMessage.PublishedStatus, persisted.Status);
+        Assert.Equal(1, persisted.Attempts);
+        Assert.Null(persisted.LeaseId);
+    }
+
+    [Fact]
+    public async Task InboxExecutesHandlerOnceAndRollsBackFailedHandlers()
+    {
+        Guid messageId = Guid.NewGuid();
+        Guid tenantId = Guid.NewGuid();
+        int executions = 0;
+
+        await using (EventingDbContext firstContext = fixture.CreateEventing())
+        {
+            var inbox = new InboxDeduplicationStore(firstContext, TimeProvider.System);
+            bool processed = await inbox.ExecuteOnceAsync(
+                "dashboard-projection",
+                messageId,
+                tenantId,
+                _ =>
+                {
+                    executions++;
+                    return Task.CompletedTask;
+                },
+                default);
+            Assert.True(processed);
+        }
+
+        await using (EventingDbContext duplicateContext = fixture.CreateEventing())
+        {
+            var inbox = new InboxDeduplicationStore(duplicateContext, TimeProvider.System);
+            bool processed = await inbox.ExecuteOnceAsync(
+                "dashboard-projection",
+                messageId,
+                tenantId,
+                _ =>
+                {
+                    executions++;
+                    return Task.CompletedTask;
+                },
+                default);
+            Assert.False(processed);
+        }
+
+        Guid failedMessageId = Guid.NewGuid();
+        await using (EventingDbContext failedContext = fixture.CreateEventing())
+        {
+            var inbox = new InboxDeduplicationStore(failedContext, TimeProvider.System);
+            _ = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                inbox.ExecuteOnceAsync(
+                    "dashboard-projection",
+                    failedMessageId,
+                    tenantId,
+                    _ => throw new InvalidOperationException("projection failed"),
+                    default));
+        }
+
+        await using (EventingDbContext retryContext = fixture.CreateEventing())
+        {
+            var inbox = new InboxDeduplicationStore(retryContext, TimeProvider.System);
+            bool retried = await inbox.ExecuteOnceAsync(
+                "dashboard-projection",
+                failedMessageId,
+                tenantId,
+                _ => Task.CompletedTask,
+                default);
+            Assert.True(retried);
+        }
+
+        Assert.Equal(1, executions);
     }
 
     [Fact]

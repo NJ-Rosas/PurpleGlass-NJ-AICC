@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using PurpleGlass.Eventing.Infrastructure;
@@ -11,9 +12,11 @@ using PurpleGlass.Eventing.Infrastructure;
 namespace PurpleGlass.Eventing.Infrastructure.Migrations
 {
     [DbContext(typeof(EventingDbContext))]
-    partial class EventingDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260725031555_AddOutboxLeasing")]
+    partial class AddOutboxLeasing
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -21,39 +24,6 @@ namespace PurpleGlass.Eventing.Infrastructure.Migrations
                 .HasAnnotation("Relational:MaxIdentifierLength", 63);
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
-
-            modelBuilder.Entity("PurpleGlass.Eventing.InboxMessage", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("ConsumerName")
-                        .IsRequired()
-                        .HasMaxLength(150)
-                        .HasColumnType("character varying(150)");
-
-                    b.Property<Guid>("MessageId")
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTimeOffset?>("ProcessedAtUtc")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<DateTimeOffset>("ReceivedAtUtc")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid>("TenantId")
-                        .HasColumnType("uuid");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("ConsumerName", "MessageId")
-                        .IsUnique();
-
-                    b.HasIndex("TenantId", "ReceivedAtUtc");
-
-                    b.ToTable("inbox_messages", "eventing");
-                });
 
             modelBuilder.Entity("PurpleGlass.Eventing.OutboxMessage", b =>
                 {
