@@ -1,10 +1,19 @@
 # Prototype 1 Implementation Status
 
-Status date: 2026-07-21
+Status date: 2026-07-24
+
+## Latest local validation
+
+- The pinned toolchain was verified: .NET SDK 10.0.302, Node.js 24.18.0, npm 11.16.0, and Docker Compose 5.3.0.
+- PostgreSQL, Mosquitto, and Valkey were started from `compose.yaml` and reported healthy.
+- The migrations host applied the Eventing, Call Management, and Conversation migrations and confirmed the existing Tenancy seed.
+- All 67 backend tests pass: 38 unit, 19 integration, and 10 architecture tests.
+- The React production build succeeds.
+- Both inbound and outbound console simulations completed with persisted `Completed` call and conversation states.
 
 ## Proven locally
 
-- The 22-project .NET/C# solution builds with zero warnings and errors.
+- The .NET/C# solution builds with zero warnings and errors.
 - PostgreSQL 18, Mosquitto 2.1.2, and Valkey 8.1.8 are healthy in Docker Compose.
 - EF Core migrations create `tenancy`, `audit`, and `eventing` schemas and seed synthetic data.
 - A development-only BFF session scopes requests to one tenant and location.
@@ -28,8 +37,14 @@ Status date: 2026-07-21
 - Production identity, authorization policies, cookies, CSRF, and security headers.
 - Outbox leasing, inbox deduplication, dead letters, and broker outage automation.
 - Browser/dashboard delivery for the durable call and transcript facts.
+- Frontend unit/component tests and a full browser end-to-end test suite.
+- Continuous integration, contract compatibility checks, dependency scanning, and secret scanning.
 - Full OpenTelemetry correlation.
 - Open Dental and real telephony, speech, and AI provider adapters.
 - Valkey usage; it is provisioned but unused in this slice.
+
+## Recommended next milestone
+
+Expose tenant-scoped durable call summaries and transcripts through the BFF and display them in the React dashboard with realtime refresh. Keep telephony, speech, and AI providers simulated until this browser-facing boundary, tenant isolation, event reliability, and observability are proven.
 
 This is a runnable architecture prototype, not a production or HIPAA-ready call center.
