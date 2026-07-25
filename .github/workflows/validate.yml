@@ -1,0 +1,60 @@
+name: Validate
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_DB: purpleglass
+          POSTGRES_USER: purpleglass
+          POSTGRES_PASSWORD: purpleglass_dev_only
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U purpleglass -d purpleglass"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    defaults:
+      run:
+        working-directory: AI Call Center
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.302
+      - name: Restore tools
+        run: dotnet tool restore
+      - name: Restore
+        run: dotnet restore src/backend/PurpleGlass.sln --locked-mode
+      - name: Build
+        run: dotnet build src/backend/PurpleGlass.sln --no-restore
+      - name: Apply migrations
+        run: dotnet run --project src/backend/Hosts/PurpleGlass.Migrations/PurpleGlass.Migrations.csproj --no-build
+      - name: Test
+        run: dotnet test src/backend/PurpleGlass.sln --no-build --no-restore
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: AI Call Center/src/frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: AI Call Center/src/frontend/package-lock.json
+      - run: npm ci
+      - run: npm run build

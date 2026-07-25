@@ -3,6 +3,12 @@
   <ItemGroup>
     <ProjectReference Include="..\..\BuildingBlocks\PurpleGlass.Application.Abstractions\PurpleGlass.Application.Abstractions.csproj" />
     <ProjectReference Include="..\..\BuildingBlocks\PurpleGlass.Observability\PurpleGlass.Observability.csproj" />
+    <ProjectReference Include="..\..\Modules\CallManagement\Application\PurpleGlass.Modules.CallManagement.Application.csproj" />
+    <ProjectReference Include="..\..\Modules\CallManagement\Contracts\PurpleGlass.Modules.CallManagement.Contracts.csproj" />
+    <ProjectReference Include="..\..\Modules\CallManagement\Infrastructure\PurpleGlass.Modules.CallManagement.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\Modules\Conversation\Application\PurpleGlass.Modules.Conversation.Application.csproj" />
+    <ProjectReference Include="..\..\Modules\Conversation\Contracts\PurpleGlass.Modules.Conversation.Contracts.csproj" />
+    <ProjectReference Include="..\..\Modules\Conversation\Infrastructure\PurpleGlass.Modules.Conversation.Infrastructure.csproj" />
     <ProjectReference Include="..\..\Modules\Tenancy\Application\PurpleGlass.Modules.Tenancy.Application.csproj" />
     <ProjectReference Include="..\..\Modules\Tenancy\Contracts\PurpleGlass.Modules.Tenancy.Contracts.csproj" />
     <ProjectReference Include="..\..\Modules\Tenancy\Infrastructure\PurpleGlass.Modules.Tenancy.Infrastructure.csproj" />

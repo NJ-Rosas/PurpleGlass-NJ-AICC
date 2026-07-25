@@ -99,6 +99,13 @@ public sealed class CallManagementService(ICallStore store, TimeProvider timePro
     public async Task<CallSummary> GetAsync(Guid tenantId, Guid callId, CancellationToken cancellationToken) =>
         Map(await store.GetAsync(tenantId, callId, false, cancellationToken) ?? throw CallApplicationException.NotFound());
 
+    public async Task<CallSummary> GetForLocationAsync(Guid tenantId, Guid locationId, Guid callId, CancellationToken cancellationToken)
+    {
+        CallSession call = await store.GetAsync(tenantId, callId, false, cancellationToken)
+            ?? throw CallApplicationException.NotFound();
+        return call.LocationId.Value == locationId ? Map(call) : throw CallApplicationException.NotFound();
+    }
+
     public async Task<CallSummary> GetByProviderCallIdAsync(Guid tenantId, string providerCallId, CancellationToken cancellationToken) =>
         Map(await store.GetByProviderCallIdAsync(tenantId, providerCallId, false, cancellationToken) ?? throw CallApplicationException.NotFound());
 

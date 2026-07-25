@@ -366,6 +366,12 @@
         "dependencies": {
           "MQTTnet": "[5.2.0.1603, )",
           "PurpleGlass.Application.Abstractions": "[1.0.0, )",
+          "PurpleGlass.Modules.CallManagement.Application": "[1.0.0, )",
+          "PurpleGlass.Modules.CallManagement.Contracts": "[1.0.0, )",
+          "PurpleGlass.Modules.CallManagement.Infrastructure": "[1.0.0, )",
+          "PurpleGlass.Modules.Conversation.Application": "[1.0.0, )",
+          "PurpleGlass.Modules.Conversation.Contracts": "[1.0.0, )",
+          "PurpleGlass.Modules.Conversation.Infrastructure": "[1.0.0, )",
           "PurpleGlass.Modules.Tenancy.Application": "[1.0.0, )",
           "PurpleGlass.Modules.Tenancy.Contracts": "[1.0.0, )",
           "PurpleGlass.Modules.Tenancy.Infrastructure": "[1.0.0, )",

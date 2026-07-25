@@ -70,6 +70,7 @@ Open <http://127.0.0.1:5173>. During development, Vite proxies browser `/bff/*` 
 docker compose ps
 curl http://127.0.0.1:5101/health/ready
 curl http://127.0.0.1:5101/bff/v1/tenant-summary
+curl http://127.0.0.1:5101/bff/v1/calls
 npm run build --prefix src/frontend
 dotnet build src/backend/PurpleGlass.sln --no-restore
 dotnet test src/backend/PurpleGlass.sln --no-build --no-restore
@@ -82,6 +83,8 @@ React → Redux/RTK Query → BFF → PostgreSQL
                              ├→ audit
                              └→ outbox → worker → MQTT → BFF → SSE → UI refresh
 ```
+
+After running either call simulator, the dashboard lists the durable call. Selecting it loads the tenant- and location-scoped transcript and generated summary from `/bff/v1/calls/{callId}`. Call and conversation MQTT events invalidate the dashboard query through the existing SSE connection.
 
 ## Safety and stop
 

@@ -36,6 +36,23 @@ public sealed class RealtimeEventHubTests
         Assert.Equal("location-display-name-changed", realtimeEvent.EventType);
     }
 
+    [Fact]
+    public void TryCreateExtractsCallEventWithoutExposingTopicScope()
+    {
+        Guid tenantId = Guid.NewGuid();
+        Guid callId = Guid.NewGuid();
+
+        bool created = RealtimeEvent.TryCreate(
+            $"pg/local/v1/tenants/{tenantId:D}/calls/{callId:D}/events/conversation-completed",
+            "{\"state\":\"Completed\"}",
+            out RealtimeEvent? realtimeEvent);
+
+        Assert.True(created);
+        Assert.NotNull(realtimeEvent);
+        Assert.Equal(tenantId, realtimeEvent.TenantId);
+        Assert.Equal("conversation-completed", realtimeEvent.EventType);
+    }
+
     [Theory]
     [InlineData("pg/local/v1/tenants/not-a-guid/events/location-display-name-changed")]
     [InlineData("pg/local/v1/tenants/11111111-1111-1111-1111-111111111111/events")]
