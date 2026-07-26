@@ -85,7 +85,7 @@ public sealed class FakeRealtimeAudioTransport : IRealtimeAudioTransport
         return ValueTask.FromResult(chunk.IsFinal
             ? new RealtimeAudioSendResult(
                 $"fake-response-{chunk.Sequence}", chunk.Audio.Length,
-                chunk.Audio.Length, chunk.Audio.Length, chunk.Audio.Length, 1, true)
+                chunk.Audio.Length, chunk.Audio.Length, chunk.Audio.Length, 1, true, 0)
             : RealtimeAudioSendResult.Pending);
     }
 

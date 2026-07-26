@@ -152,6 +152,75 @@ public sealed class RealtimeVoiceTests
         Assert.False(detector.IsSpeechActive);
     }
 
+    [Theory]
+    [InlineData(220)]
+    [InlineData(600)]
+    [InlineData(1_200)]
+    public void ShortSpeechLikeAnswerStillProducesExactlyOneUtterance(int frequencyHz)
+    {
+        using var detector = new RealtimeTurnDetector(Options());
+        DateTimeOffset now = DateTimeOffset.Parse("2026-07-26T12:00:00Z", CultureInfo.InvariantCulture);
+        var finalized = new List<FinalizedVoiceUtterance>();
+        var rejected = new List<RejectedVoiceCandidate>();
+        long sequence = 1;
+
+        for (int index = 0; index < 6; index++)
+            Capture(detector.Push(PcmFrame(sequence++, now, 8_000, frequencyHz)), finalized, rejected);
+        for (int index = 0; index < 25; index++)
+            Capture(detector.Push(PcmFrame(sequence++, now, amplitude: 0)), finalized, rejected);
+
+        FinalizedVoiceUtterance utterance = Assert.Single(finalized);
+        Assert.Empty(rejected);
+        Assert.Equal(TimeSpan.FromMilliseconds(120), utterance.QualifiedSpeechDuration);
+    }
+
+    [Fact]
+    public void AdaptiveGateRejectsVaryingNoiseBurstsIncludingThreeHundredMillisecondsAboveThreshold()
+    {
+        using var detector = new RealtimeTurnDetector(Options());
+        DateTimeOffset now = DateTimeOffset.Parse("2026-07-26T12:00:00Z", CultureInfo.InvariantCulture);
+        var finalized = new List<FinalizedVoiceUtterance>();
+        var rejected = new List<RejectedVoiceCandidate>();
+        long sequence = 1;
+
+        for (int index = 0; index < 50; index++)
+            Capture(detector.Push(NoiseFrame(sequence++, now, (short)(100 + (index % 4 * 80)))), finalized, rejected);
+        for (int burst = 0; burst < 4; burst++)
+        {
+            for (int index = 0; index < 3; index++)
+                Capture(detector.Push(PcmFrame(sequence++, now, amplitude: 450)), finalized, rejected);
+            Capture(detector.Push(PcmFrame(sequence++, now, amplitude: 0)), finalized, rejected);
+        }
+        for (int index = 0; index < 15; index++)
+            Capture(detector.Push(NoiseFrame(sequence++, now, amplitude: 3_000)), finalized, rejected);
+        for (int index = 0; index < 25; index++)
+            Capture(detector.Push(PcmFrame(sequence++, now, amplitude: 0)), finalized, rejected);
+
+        Assert.Empty(finalized);
+        Assert.False(detector.IsSpeechActive);
+        Assert.Contains(rejected, candidate => candidate.DiscardReason == "speech_not_voice_like"
+            && candidate.Duration >= TimeSpan.FromMilliseconds(300));
+        Assert.True(detector.NoiseFloor > 0);
+    }
+
+    [Fact]
+    public void EchoLikeEnergyDoesNotConfirmBargeInBeforeFullQualificationWindow()
+    {
+        using var detector = new RealtimeTurnDetector(Options());
+        DateTimeOffset now = DateTimeOffset.Parse("2026-07-26T12:00:00Z", CultureInfo.InvariantCulture);
+
+        for (int index = 0; index < 5; index++)
+        {
+            TurnDetectionResult candidate = detector.Push(PcmFrame(index + 1, now, 7_000, 900));
+            Assert.False(candidate.SpeechStarted);
+            Assert.True(index != 0 || candidate.CandidateStarted);
+        }
+
+        TurnDetectionResult confirmed = detector.Push(PcmFrame(6, now, 7_000, 900));
+        Assert.True(confirmed.SpeechStarted);
+        Assert.True(detector.IsSpeechActive);
+    }
+
     [Fact]
     public void VoiceResponsePolicyNormalizesAndConstrainsLongResponses()
     {
@@ -361,14 +430,36 @@ public sealed class RealtimeVoiceTests
     private static RealtimeAudioFrame Silence(long sequence, DateTimeOffset receivedAt) =>
         new(sequence, AudioFormat.SyntheticText, ReadOnlyMemory<byte>.Empty, receivedAt);
 
-    private static RealtimeAudioFrame PcmFrame(long sequence, DateTimeOffset receivedAt, short amplitude)
+    private static RealtimeAudioFrame PcmFrame(
+        long sequence,
+        DateTimeOffset receivedAt,
+        short amplitude,
+        int frequencyHz = 1_000)
     {
         const int samples = 160;
         var pcm = new byte[samples * sizeof(short)];
         for (int index = 0; index < samples; index++)
         {
-            short sample = amplitude == 0 ? (short)0
-                : (short)(index % 8 < 4 ? amplitude : -amplitude);
+            short sample = amplitude == 0 ? (short)0 : (short)Math.Round(
+                amplitude * Math.Sin(2 * Math.PI * frequencyHz * index / 8_000),
+                MidpointRounding.AwayFromZero);
+            BinaryPrimitives.WriteInt16LittleEndian(pcm.AsSpan(index * sizeof(short)), sample);
+        }
+        return new RealtimeAudioFrame(
+            sequence, AudioFormat.Pcm16(), pcm,
+            receivedAt.AddMilliseconds((sequence - 1) * 20));
+    }
+
+    private static RealtimeAudioFrame NoiseFrame(
+        long sequence,
+        DateTimeOffset receivedAt,
+        short amplitude)
+    {
+        var pcm = new byte[160 * sizeof(short)];
+        for (int index = 0; index < 160; index++)
+        {
+            int magnitude = amplitude - ((index * 37) % Math.Max(1, amplitude / 3));
+            short sample = (short)(index % 2 == 0 ? magnitude : -magnitude);
             BinaryPrimitives.WriteInt16LittleEndian(pcm.AsSpan(index * sizeof(short)), sample);
         }
         return new RealtimeAudioFrame(

@@ -52,9 +52,10 @@ public sealed record RealtimeAudioSendResult(
     int ResampledSamples,
     int MuLawBytes,
     int MediaMessageCount,
-    bool MarkSent)
+    bool MarkSent,
+    double MaximumBufferedAudioDurationMs)
 {
-    public static RealtimeAudioSendResult Pending { get; } = new(string.Empty, 0, 0, 0, 0, 0, false);
+    public static RealtimeAudioSendResult Pending { get; } = new(string.Empty, 0, 0, 0, 0, 0, false, 0);
 }
 
 public sealed record VoiceSessionStateChange(
@@ -84,4 +85,7 @@ public sealed record FinalizedVoiceUtterance(
     DateTimeOffset StartedAtUtc,
     DateTimeOffset EndedAtUtc,
     int InboundFrames = 1,
-    TimeSpan? Duration = null);
+    TimeSpan? Duration = null,
+    TimeSpan? QualifiedSpeechDuration = null,
+    double NoiseFloor = 0,
+    double EnergyMetric = 0);

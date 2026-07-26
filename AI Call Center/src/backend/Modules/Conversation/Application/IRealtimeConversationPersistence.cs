@@ -30,6 +30,7 @@ public interface IVoiceSessionDiagnostics
     void RecordException(VoiceSessionExceptionDiagnostic diagnostic);
     void RecordInboundTurn(VoiceInboundTurnDiagnostic diagnostic) { }
     void RecordOutboundResponse(VoiceOutboundResponseDiagnostic diagnostic) { }
+    void RecordPlaybackEvent(VoicePlaybackEventDiagnostic diagnostic) { }
 }
 
 public sealed record VoiceInboundTurnDiagnostic(
@@ -38,9 +39,13 @@ public sealed record VoiceInboundTurnDiagnostic(
     string TurnId,
     int InboundFrames,
     double DurationMs,
+    double QualifiedSpeechMs,
+    double NoiseFloor,
+    double EnergyMetric,
     bool SpeechQualified,
     bool SttSubmitted,
-    string? DiscardReason);
+    string? DiscardReason,
+    string Event);
 
 public sealed record VoiceOutboundResponseDiagnostic(
     Guid CallId,
@@ -54,6 +59,15 @@ public sealed record VoiceOutboundResponseDiagnostic(
     bool MarkSent,
     bool Cleared,
     bool Canceled);
+
+public sealed record VoicePlaybackEventDiagnostic(
+    Guid CallId,
+    Guid CorrelationId,
+    string ResponseId,
+    string Event,
+    int MediaMessagesSent,
+    double BufferedAudioDurationMs,
+    string SafeReason);
 
 public sealed record VoiceSessionExceptionDiagnostic(
     Guid CallId,

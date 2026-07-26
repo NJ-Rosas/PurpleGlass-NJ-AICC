@@ -157,6 +157,44 @@ public sealed class RealtimeVoicePipelineTests(DurablePathFixture fixture)
     }
 
     [Fact]
+    public async Task NoiseCandidateDoesNotClearPlaybackButConfirmedShortSpeechDoes()
+    {
+        var recognizer = new ControlledSpeechRecognizer(response: (_, invocation) =>
+            invocation == 1 ? "First question" : "Help me");
+        var synthesizer = new ControlledSpeechSynthesizer(blockOnInvocation: 2);
+        await using SessionHarness harness = await CreateHarnessAsync(
+            recognizer: recognizer,
+            synthesizer: synthesizer);
+        Task run = harness.Start();
+        _ = await harness.States.WaitForAsync(change => change.State == VoiceSessionState.Listening);
+
+        await harness.Transport.QueueUtteranceAsync("First question");
+        await synthesizer.WaitForInvocationsAsync(2);
+        long sequence = 100;
+        sequence = await QueueNoiseFramesAsync(harness.Transport, sequence, 15, amplitude: 3_000);
+        await Task.Delay(100);
+
+        Assert.False(synthesizer.CancellationObserved);
+        Assert.Equal(0, harness.Transport.ClearPlaybackCount);
+
+        sequence = await QueuePcmFramesAsync(harness.Transport, sequence, 6, amplitude: 8_000);
+        _ = await QueuePcmFramesAsync(harness.Transport, sequence, 25, amplitude: 0);
+        await synthesizer.WaitForInvocationsAsync(3);
+        _ = await harness.States.WaitForOccurrencesAsync(VoiceSessionState.Listening, 2);
+        harness.Transport.CompleteInput();
+        await run.WaitAsync(TestTimeout);
+
+        Assert.True(synthesizer.CancellationObserved);
+        Assert.Equal(1, harness.Transport.ClearPlaybackCount);
+        Assert.Equal(2, recognizer.Requests.Count);
+        Assert.Equal(2, harness.LanguageModel.Requests.Count);
+        Assert.Contains("Hello from the assistant.", DecodeOutput(harness.Transport));
+        Assert.DoesNotContain(harness.States.Changes,
+            change => change.State == VoiceSessionState.Failed);
+        await AssertCompletedAndDisposedAsync(harness, "media_disconnected");
+    }
+
+    [Fact]
     public async Task CallerBargeInDuringCallerTurnCommitDoesNotPoisonTheNextTurn()
     {
         var interceptor = new BlockingCallerTurnCommandInterceptor();
@@ -436,15 +474,16 @@ public sealed class RealtimeVoicePipelineTests(DurablePathFixture fixture)
     }
 
     [Fact]
-    public async Task SustainedSilenceAndLowNoiseDoNotSubmitSttOrConsumeTurns()
+    public async Task TenSecondsSilenceAndNoiseConsumeNoTurnsAndShortSpeechStillWorksAfterward()
     {
-        await using SessionHarness harness = await CreateHarnessAsync();
+        var recognizer = new ControlledSpeechRecognizer(response: (_, _) => "Yes");
+        await using SessionHarness harness = await CreateHarnessAsync(recognizer: recognizer);
         Task run = harness.Start();
         _ = await harness.States.WaitForAsync(change => change.State == VoiceSessionState.Listening);
         long sequence = 1;
 
-        sequence = await QueuePcmFramesAsync(harness.Transport, sequence, 150, amplitude: 0);
-        _ = await QueuePcmFramesAsync(harness.Transport, sequence, 150, amplitude: 200);
+        sequence = await QueuePcmFramesAsync(harness.Transport, sequence, 500, amplitude: 0);
+        sequence = await QueuePcmFramesAsync(harness.Transport, sequence, 100, amplitude: 200);
         await Task.Delay(100);
 
         Assert.Empty(harness.Recognizer.Requests);
@@ -454,11 +493,19 @@ public sealed class RealtimeVoicePipelineTests(DurablePathFixture fixture)
         Assert.DoesNotContain(harness.States.Changes,
             change => change.SafeCode == "maximum_turns");
 
+        sequence = await QueuePcmFramesAsync(harness.Transport, sequence, 6, amplitude: 8_000);
+        _ = await QueuePcmFramesAsync(harness.Transport, sequence, 25, amplitude: 0);
+        _ = await harness.States.WaitForOccurrencesAsync(VoiceSessionState.Listening, 2);
+
+        Assert.Single(harness.Recognizer.Requests);
+        Assert.Single(harness.LanguageModel.Requests);
+        Assert.Equal(2, harness.Synthesizer.Requests.Count);
+
         harness.Transport.CompleteInput();
         await run.WaitAsync(TestTimeout);
         ConversationDetails details = await ReadDetailsAsync(harness.TenantId, harness.CallId);
-        Assert.Single(details.Transcript);
-        Assert.Equal("Assistant", details.Transcript[0].Speaker);
+        Assert.Equal([Greeting, "Yes", "Hello from the assistant."],
+            details.Transcript.OrderBy(turn => turn.SequenceNumber).Select(turn => turn.Text).ToArray());
         await AssertCompletedAndDisposedAsync(harness, "media_disconnected");
     }
 
@@ -655,8 +702,34 @@ public sealed class RealtimeVoicePipelineTests(DurablePathFixture fixture)
             var pcm = new byte[160 * sizeof(short)];
             for (int sampleIndex = 0; sampleIndex < 160; sampleIndex++)
             {
-                short sample = amplitude == 0 ? (short)0
-                    : (short)(sampleIndex % 8 < 4 ? amplitude : -amplitude);
+                short sample = amplitude == 0 ? (short)0 : (short)Math.Round(
+                    amplitude * Math.Sin(2 * Math.PI * 1_000 * sampleIndex / 8_000),
+                    MidpointRounding.AwayFromZero);
+                BinaryPrimitives.WriteInt16LittleEndian(pcm.AsSpan(sampleIndex * sizeof(short)), sample);
+            }
+            long sequence = firstSequence + frameIndex;
+            await transport.QueueFrameAsync(new RealtimeAudioFrame(
+                sequence,
+                AudioFormat.Pcm16(),
+                pcm,
+                DateTimeOffset.UtcNow.AddMilliseconds(sequence * 20)));
+        }
+        return firstSequence + count;
+    }
+
+    private static async Task<long> QueueNoiseFramesAsync(
+        FakeRealtimeAudioTransport transport,
+        long firstSequence,
+        int count,
+        short amplitude)
+    {
+        for (int frameIndex = 0; frameIndex < count; frameIndex++)
+        {
+            var pcm = new byte[160 * sizeof(short)];
+            for (int sampleIndex = 0; sampleIndex < 160; sampleIndex++)
+            {
+                int magnitude = amplitude - ((sampleIndex * 37) % Math.Max(1, amplitude / 3));
+                short sample = (short)(sampleIndex % 2 == 0 ? magnitude : -magnitude);
                 BinaryPrimitives.WriteInt16LittleEndian(pcm.AsSpan(sampleIndex * sizeof(short)), sample);
             }
             long sequence = firstSequence + frameIndex;

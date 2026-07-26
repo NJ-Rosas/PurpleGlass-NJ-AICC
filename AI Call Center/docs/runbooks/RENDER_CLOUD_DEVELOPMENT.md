@@ -98,13 +98,18 @@ The first controlled call after that anti-alias change exposed a separate live r
 
 The hardened implementation requires 120 ms of contiguous energy-qualified PCM before declaring speech, retaining those candidate frames as the utterance pre-roll. Digital/μ-law silence, low-level noise, and a short transient are discarded before STT. Inbound ownership uses Twilio media `chunk` and `timestamp`; repeated chunks are dropped and backwards timestamps are rejected. A finalized turn ID is submitted at most once. This leaves `maximum_turns` unchanged but ensures unqualified or duplicate internal work does not consume it.
 
+The next live validation confirmed that synthesized voice was audible, the earlier word-tail "fff" artifact was gone, real multi-turn conversation and persistence worked, and normal completion remained healthy. It also showed that fixed energy plus 120 ms alone still allowed occasional non-intentional audio to reach STT, and intentional caller speech often did not stop an already playing assistant response promptly. The retained evidence has no raw audio, so it does not prove whether the non-intentional input was handset noise, room noise, breath, or acoustic echo. The software condition was measurable: any sustained above-threshold waveform could qualify without voice-shape or adaptive-noise checks.
+
+The final Task 10 speech gate keeps the 120 ms confirmation latency but adds an adaptive recent-silence RMS floor, separate speech-start and continuation thresholds, and lightweight crest-factor and zero-crossing checks. A candidate must contain a configured ratio of speech-like frames; a 300 ms above-threshold hiss/noise candidate is rejected without clearing playback. Short speech-like 120 ms fixtures remain accepted. This is deliberately a lightweight telephone VAD, not language filtering or acoustic echo cancellation.
+
 The exact production outbound pipeline is:
 
 1. OpenAI `gpt-4o-mini-tts` returns requested raw `pcm`: signed 16-bit little-endian, 24 kHz, mono, with no container header.
 2. PurpleGlass retains only each chunk's valid bytes and assembles one bounded PCM buffer per synthesized response.
 3. A windowed-sinc band-limited converter low-pass filters and resamples the contiguous response to signed 16-bit PCM at 8 kHz, mono. Boundary coefficients are normalized; the final partial sample count is rounded from the real source length without capacity padding.
-4. The standard G.711 μ-law encoder converts every valid 8 kHz sample. The resulting raw `audio/x-mulaw` bytes are split at the configured outbound media bound (8 KiB by default), Base64-encoded from the exact offset and length, and sent in serialized WebSocket text `media` messages.
-5. A response-specific `mark` follows its media. Barge-in sends Twilio `clear` under the same per-call write lock and resets any locally buffered partial response before a later response can start.
+4. The standard G.711 μ-law encoder converts every valid 8 kHz sample. PurpleGlass sends the resulting bytes in paced 100 ms packets. This bounds normal provider-side send-ahead to approximately 100 ms instead of uploading the entire response as fast as the network allows.
+5. A response-specific generation remains active throughout paced sending. Every packet and pacing interval observes cancellation. A confirmed barge-in invalidates that generation, cancels remaining sends, then serializes Twilio `clear`; no later packet or mark from the canceled generation can follow it.
+6. A response-specific `mark` follows only a normally completed response. Mark acknowledgements remove pending playback state. `clear` cancels pending marks, so a late acknowledgement cannot restore a canceled response.
 
 Every completed send now returns and logs structured counts for source PCM bytes/samples, resampled samples, μ-law bytes, media-message count, and mark emission. A synthesis response with no final chunk, zero PCM, zero μ-law bytes, zero media messages, or no mark fails safely instead of appearing successful. Inbound diagnostics record only frame count, duration, qualification/submission booleans, and a language-neutral discard reason. Neither diagnostic contains audio, Base64, transcript text, phone numbers, or credentials.
 
@@ -121,15 +126,17 @@ For an existing Blueprint, use this exact workflow:
 7. Require BFF `/health/live` to return HTTP 200.
 8. Require BFF `/health/ready` to return HTTP 200 with healthy PostgreSQL and telephony/voice checks.
 9. Sign in again if the BFF restarted and its ephemeral Data Protection keys invalidated the old development session.
-10. Make one controlled call to the verified trial recipient and hear the initial greeting.
-11. Remain silent briefly and verify there is no caller turn, STT submission, or phantom assistant response.
-12. Speak one clear sentence and hear exactly one assistant response.
-13. Wait silently again and verify no extra turn or response appears.
-14. Complete several caller/assistant turns and confirm outbound media counts are nonzero for every completed response.
-15. Make one natural barge-in; confirm `clear` stops the old response, the caller utterance is recognized once, and the next response plays normally.
-16. Listen specifically for word-tail hiss, clicks, or static.
-17. Hang up normally, then confirm completed call/conversation state and the durable transcript after refresh.
-18. Confirm the session is `Completed`, not `Failed`, and that `maximum_turns` did not occur unless the configured number of legitimate caller utterances was genuinely reached.
+10. Make one controlled call to the verified trial recipient, answer, and hear the initial greeting.
+11. Remain silent for 10 seconds; verify zero caller turns and zero phantom responses.
+12. Say one short valid answer such as "Yes" and hear exactly one assistant response.
+13. Remain silent again and verify no extra response appears.
+14. Start a turn that produces a longer assistant response.
+15. Interrupt after approximately one second of assistant playback.
+16. Confirm the old audio stops promptly, the caller utterance is recognized once, and a new response plays normally.
+17. Complete two or three additional caller/assistant turns.
+18. Listen specifically for word-tail hiss, clicks, or static.
+19. Hang up normally, then confirm completed call/conversation state and the durable transcript after refresh.
+20. Confirm the session is `Completed`, not `Failed`, and that `maximum_turns` did not occur unless the configured number of legitimate caller utterances was genuinely reached.
 
 Do not place the call when Blueprint sync is pending, a required secret is missing, or readiness is not HTTP 200.
 

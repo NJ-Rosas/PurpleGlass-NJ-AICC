@@ -18,6 +18,10 @@ public sealed class TwilioRealtimeAudioOptions
 
     public int MaxOutboundMediaBytes { get; init; } = 8 * 1024;
 
+    public TimeSpan OutboundPacketDuration { get; init; } = TimeSpan.FromMilliseconds(100);
+
+    public bool EnableOutboundPacing { get; init; } = true;
+
     public TwilioRealtimeAudioOptions Validate()
     {
         if (StartTimeout <= TimeSpan.Zero || StartTimeout > TimeSpan.FromSeconds(30))
@@ -36,6 +40,14 @@ public sealed class TwilioRealtimeAudioOptions
             throw new InvalidOperationException("Twilio PCM responses have an invalid bound.");
         if (MaxOutboundMediaBytes < 80 || MaxOutboundMediaBytes > MaxDecodedMediaBytes)
             throw new InvalidOperationException("Twilio outbound media has an invalid bound.");
+        if (OutboundPacketDuration < TimeSpan.FromMilliseconds(20)
+            || OutboundPacketDuration > TimeSpan.FromMilliseconds(250))
+            throw new InvalidOperationException("Twilio outbound packet duration must be between 20 and 250 milliseconds.");
+        int pacedMediaBytes = checked((int)Math.Round(
+            TwilioRealtimeAudioProtocol.TelephonySampleRate * OutboundPacketDuration.TotalSeconds,
+            MidpointRounding.AwayFromZero));
+        if (pacedMediaBytes < 80 || pacedMediaBytes > MaxOutboundMediaBytes)
+            throw new InvalidOperationException("Twilio paced media must fit the outbound media bound.");
 
         int maximumEncodedLength = checked(((MaxOutboundMediaBytes + 2) / 3) * 4 + 512);
         if (maximumEncodedLength > MaxJsonMessageBytes)

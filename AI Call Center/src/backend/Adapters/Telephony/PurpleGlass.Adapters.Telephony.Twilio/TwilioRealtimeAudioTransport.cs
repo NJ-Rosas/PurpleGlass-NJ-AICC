@@ -72,6 +72,7 @@ public sealed class TwilioRealtimeAudioTransport : IRealtimeAudioTransport
         await writeLock.WaitAsync(cancellationToken);
         byte[] pcm = [];
         byte[] encoded = [];
+        int mediaMessageCount = 0;
         try
         {
             ThrowIfUnavailable();
@@ -98,10 +99,13 @@ public sealed class TwilioRealtimeAudioTransport : IRealtimeAudioTransport
             }
             encoded = TwilioMuLawCodec.EncodePcm16(pcm);
 
-            int mediaMessageCount = 0;
-            for (int offset = 0; offset < encoded.Length; offset += options.MaxOutboundMediaBytes)
+            int pacedMediaBytes = Math.Min(options.MaxOutboundMediaBytes, checked((int)Math.Round(
+                TwilioRealtimeAudioProtocol.TelephonySampleRate * options.OutboundPacketDuration.TotalSeconds,
+                MidpointRounding.AwayFromZero)));
+            for (int offset = 0; offset < encoded.Length; offset += pacedMediaBytes)
             {
-                int length = Math.Min(options.MaxOutboundMediaBytes, encoded.Length - offset);
+                cancellationToken.ThrowIfCancellationRequested();
+                int length = Math.Min(pacedMediaBytes, encoded.Length - offset);
                 string payload = Convert.ToBase64String(encoded, offset, length);
                 await SendWireMessageLockedAsync(new
                 {
@@ -110,6 +114,8 @@ public sealed class TwilioRealtimeAudioTransport : IRealtimeAudioTransport
                     media = new { payload },
                 }, cancellationToken);
                 mediaMessageCount++;
+                if (options.EnableOutboundPacing)
+                    await Task.Delay(options.OutboundPacketDuration, timeProvider, cancellationToken);
             }
 
             if (mediaMessageCount == 0 || encoded.Length == 0)
@@ -137,7 +143,19 @@ public sealed class TwilioRealtimeAudioTransport : IRealtimeAudioTransport
                 pcm.Length / sizeof(short),
                 encoded.Length,
                 mediaMessageCount,
-                true);
+                true,
+                options.EnableOutboundPacing ? options.OutboundPacketDuration.TotalMilliseconds : 0);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            Activity.Current?.AddEvent(new ActivityEvent(
+                "voice.media_suppressed_generation_stale",
+                tags: new ActivityTagsCollection
+                {
+                    ["voice.media_messages_sent"] = mediaMessageCount,
+                    ["voice.safe_reason"] = "response_canceled",
+                }));
+            throw;
         }
         finally
         {
@@ -155,11 +173,14 @@ public sealed class TwilioRealtimeAudioTransport : IRealtimeAudioTransport
         {
             ThrowIfUnavailable();
             ResetPendingPcmLocked();
+            foreach (string mark in pendingMarks.Keys)
+                _ = pendingMarks.TryRemove(mark, out _);
             await SendWireMessageLockedAsync(new
             {
                 @event = "clear",
                 streamSid = ProviderMediaStreamId,
             }, cancellationToken);
+            Activity.Current?.AddEvent(new ActivityEvent("voice.twilio_clear_sent"));
         }
         finally
         {
@@ -281,6 +302,13 @@ public sealed class TwilioRealtimeAudioTransport : IRealtimeAudioTransport
         string name = TwilioRealtimeAudioProtocol.RequireString(mark, "name", 128);
         bool acknowledged = pendingMarks.TryRemove(name, out _);
         Activity.Current?.SetTag("voice.mark_acknowledged", acknowledged);
+        Activity.Current?.AddEvent(new ActivityEvent(
+            "voice.playback_mark_acknowledged",
+            tags: new ActivityTagsCollection
+            {
+                ["voice.response_id"] = name,
+                ["voice.mark_acknowledged"] = acknowledged,
+            }));
         return ReceiveEvent.None;
     }
 

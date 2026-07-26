@@ -139,6 +139,44 @@ public sealed class TwilioRealtimeAudioTests
     }
 
     [Fact]
+    public async Task FiveSecondResponseStopsSendingAfterOneSecondEquivalentCancellationAndClear()
+    {
+        var socket = InitializedSocket();
+        var options = new TwilioRealtimeAudioOptions
+        {
+            EnableOutboundPacing = true,
+            OutboundPacketDuration = TimeSpan.FromMilliseconds(100),
+        };
+        TwilioRealtimeAudioTransport transport = await InitializeAsync(socket, options: options);
+        byte[] source = SinePcm(24_000, 900, 5, 10_000);
+        using var cancellation = new CancellationTokenSource();
+
+        Task<RealtimeAudioSendResult> send = transport.SendAsync(new SynthesizedAudioChunk(
+            1, AudioFormat.Pcm16(24_000), source, IsFinal: true), cancellation.Token).AsTask();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+        while (socket.CountSentEvents("media") < 10)
+            await Task.Delay(10, timeout.Token);
+
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => send);
+        await transport.ClearPlaybackAsync(default);
+        int canceledMediaCount = socket.CountSentEvents("media");
+
+        Assert.InRange(canceledMediaCount, 10, 11);
+        Assert.Equal(0, socket.CountSentEvents("mark"));
+        Assert.Equal("clear", socket.LastSentEvent());
+        await Task.Delay(150);
+        Assert.Equal(canceledMediaCount, socket.CountSentEvents("media"));
+
+        await transport.SendAsync(new SynthesizedAudioChunk(
+            1, AudioFormat.Pcm16(8_000), SinePcm(8_000, 700, 0.1, 8_000), IsFinal: true), default);
+        Assert.Equal(canceledMediaCount + 1, socket.CountSentEvents("media"));
+        Assert.Equal(1, socket.CountSentEvents("mark"));
+        Assert.Equal("mark", socket.LastSentEvent());
+        await transport.DisposeAsync();
+    }
+
+    [Fact]
     public async Task OutboundTrackAndDuplicateInboundChunksCannotBecomeCallerFrames()
     {
         var socket = InitializedSocket();
@@ -362,7 +400,7 @@ public sealed class TwilioRealtimeAudioTests
         new TwilioRealtimeAudioTransportFactory().InitializeAsync(
             socket,
             expectedAccountSid,
-            options ?? new TwilioRealtimeAudioOptions(),
+            options ?? new TwilioRealtimeAudioOptions { EnableOutboundPacing = false },
             default);
 
     private static async Task<byte[]> SendAndCollectMuLawAsync(
@@ -521,6 +559,18 @@ public sealed class TwilioRealtimeAudioTests
 
         public List<string> SentTextMessages { get; } = [];
 
+        public int CountSentEvents(string eventName)
+        {
+            lock (SentTextMessages)
+                return SentTextMessages.Count(message => EventName(message) == eventName);
+        }
+
+        public string LastSentEvent()
+        {
+            lock (SentTextMessages)
+                return EventName(SentTextMessages[^1]);
+        }
+
         public override WebSocketCloseStatus? CloseStatus => closeStatus;
 
         public override string? CloseStatusDescription => closeStatusDescription;
@@ -632,8 +682,16 @@ public sealed class TwilioRealtimeAudioTests
             Assert.Equal(WebSocketMessageType.Text, messageType);
             outboundMessage.Write(buffer.Span);
             if (!endOfMessage) return;
-            SentTextMessages.Add(Encoding.UTF8.GetString(outboundMessage.GetBuffer(), 0, checked((int)outboundMessage.Length)));
+            lock (SentTextMessages)
+                SentTextMessages.Add(Encoding.UTF8.GetString(
+                    outboundMessage.GetBuffer(), 0, checked((int)outboundMessage.Length)));
             outboundMessage.SetLength(0);
+        }
+
+        private static string EventName(string message)
+        {
+            using JsonDocument json = JsonDocument.Parse(message);
+            return json.RootElement.GetProperty("event").GetString()!;
         }
     }
 }
