@@ -15,6 +15,14 @@ public sealed record ConversationRuntimeConfiguration
     public required string SpeechSynthesisAdapterKey { get; init; }
     public int MaximumTurns { get; init; } = 6;
     public TimeSpan InactivityTimeout { get; init; } = TimeSpan.FromSeconds(30);
+    public TimeSpan MaximumDuration { get; init; } = TimeSpan.FromMinutes(30);
+    public int MaximumHistoryTurns { get; init; } = 12;
+    public int MaximumOutputTokens { get; init; } = 160;
+    public int MaximumResponseCharacters { get; init; } = 400;
+    public decimal SpeakingRate { get; init; } = 1.0m;
+    public string SystemPrompt { get; init; } =
+        "You are the PurpleGlass development voice assistant. Respond clearly and briefly. " +
+        "Do not claim to perform actions or access systems that are not available.";
     public Dictionary<string, string> ApprovedResponses { get; init; } =
         new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
     public string[] EscalationKeywords { get; init; } = [];
@@ -36,6 +44,19 @@ public sealed record ConversationRuntimeConfiguration
         if (MaximumTurns is < 1 or > 50) throw new InvalidOperationException("MaximumTurns must be between 1 and 50.");
         if (InactivityTimeout <= TimeSpan.Zero || InactivityTimeout > TimeSpan.FromMinutes(10))
             throw new InvalidOperationException("InactivityTimeout must be between zero and ten minutes.");
+        if (MaximumDuration <= TimeSpan.Zero || MaximumDuration > TimeSpan.FromHours(4))
+            throw new InvalidOperationException("MaximumDuration must be between zero and four hours.");
+        if (MaximumHistoryTurns is < 1 or > 100)
+            throw new InvalidOperationException("MaximumHistoryTurns must be between 1 and 100.");
+        if (MaximumOutputTokens is < 16 or > 2_000)
+            throw new InvalidOperationException("MaximumOutputTokens must be between 16 and 2000.");
+        if (MaximumResponseCharacters is < 20 or > 8_000)
+            throw new InvalidOperationException("MaximumResponseCharacters must be between 20 and 8000.");
+        if (SpeakingRate is < 0.5m or > 2.0m)
+            throw new InvalidOperationException("SpeakingRate must be between 0.5 and 2.0.");
+        Require(SystemPrompt, nameof(SystemPrompt));
+        if (SystemPrompt.Length > 4_000)
+            throw new InvalidOperationException("SystemPrompt cannot exceed 4000 characters.");
         return this;
     }
 
@@ -45,7 +66,7 @@ public sealed record ConversationRuntimeConfiguration
     }
 }
 
-public sealed record VoiceConfiguration(string VoiceId, string Style = "neutral");
+public sealed record VoiceConfiguration(string VoiceId, string Style = "neutral", decimal SpeakingRate = 1.0m);
 
 public sealed record SafetyEscalationPolicy(
     string Version,

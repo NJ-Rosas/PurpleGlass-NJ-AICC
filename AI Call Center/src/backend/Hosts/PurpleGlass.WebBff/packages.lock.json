@@ -119,6 +119,30 @@
           "Microsoft.IdentityModel.Tokens": "8.19.2"
         }
       },
+      "purpleglass.adapters.ai.mock": {
+        "type": "Project",
+        "dependencies": {
+          "PurpleGlass.Modules.Conversation.Application": "[1.0.0, )"
+        }
+      },
+      "purpleglass.adapters.ai.openai": {
+        "type": "Project",
+        "dependencies": {
+          "PurpleGlass.Modules.Conversation.Application": "[1.0.0, )"
+        }
+      },
+      "purpleglass.adapters.speech.mock": {
+        "type": "Project",
+        "dependencies": {
+          "PurpleGlass.Modules.Conversation.Application": "[1.0.0, )"
+        }
+      },
+      "purpleglass.adapters.speech.openai": {
+        "type": "Project",
+        "dependencies": {
+          "PurpleGlass.Modules.Conversation.Application": "[1.0.0, )"
+        }
+      },
       "purpleglass.adapters.telephony.fake": {
         "type": "Project",
         "dependencies": {
@@ -129,6 +153,7 @@
         "type": "Project",
         "dependencies": {
           "PurpleGlass.Modules.CallManagement.Application": "[1.0.0, )",
+          "PurpleGlass.Modules.Conversation.Application": "[1.0.0, )",
           "Twilio": "[7.14.9, )"
         }
       },
@@ -215,7 +240,8 @@
           "PurpleGlass.Eventing": "[1.0.0, )",
           "PurpleGlass.Modules.CallManagement.Contracts": "[1.0.0, )",
           "PurpleGlass.Modules.Conversation.Contracts": "[1.0.0, )",
-          "PurpleGlass.Modules.Conversation.Domain": "[1.0.0, )"
+          "PurpleGlass.Modules.Conversation.Domain": "[1.0.0, )",
+          "PurpleGlass.Observability": "[1.0.0, )"
         }
       },
       "purpleglass.modules.conversation.contracts": {

@@ -55,7 +55,7 @@ public sealed partial class TelephonyTransportWorker(
             {
                 var request = new OutboundCallTransport(
                     dispatch.OperationId, dispatch.CallId, dispatch.FromNumber, dispatch.ToNumber,
-                    new Uri(publicBaseUrl, $"/telephony/twilio/answer?callId={dispatch.CallId:D}"),
+                    new Uri(publicBaseUrl, $"/telephony/twilio/answer?operationId={dispatch.OperationId:D}"),
                     new Uri(publicBaseUrl, $"/telephony/twilio/status?operationId={dispatch.OperationId:D}"));
                 OutboundCallResult result = await provider.StartOutboundCallAsync(request, stoppingToken);
                 providerCallId = result.ProviderCallId;

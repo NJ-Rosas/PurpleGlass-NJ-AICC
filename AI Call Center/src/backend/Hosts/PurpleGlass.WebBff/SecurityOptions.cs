@@ -57,8 +57,10 @@ public static class ProductionSecurityValidator
             throw Invalid("development authentication must be disabled");
         if (!security.AllowSyntheticDataOnly || safety.AllowSensitiveData)
             throw Invalid("synthetic-data-only mode must remain enabled");
-        if (safety.EnableRealAI || safety.EnableRealSpeech || safety.EnableOpenDental)
-            throw Invalid("AI, speech, and clinical external providers must remain disabled");
+        if (safety.EnableOpenDental)
+            throw Invalid("clinical external providers must remain disabled");
+        if (!environment.IsDevelopment() && (safety.EnableRealAI || safety.EnableRealSpeech))
+            throw Invalid("real AI and speech external providers are permitted only in explicit development mode");
 
         if (!environment.IsProduction()) return;
 

@@ -33,7 +33,7 @@ public sealed class SimulatedCallFlowTests(SimulatedCallFlowFixture fixture)
         Assert.Contains(result.Transcript, turn => turn.Speaker == "Caller");
         Assert.Contains(result.Transcript, turn => turn.Speaker == "Assistant");
         Assert.NotNull(result.Summary);
-        Assert.Contains("office-hours", result.Summary.CallerIntent, StringComparison.Ordinal);
+        Assert.Contains("general-test", result.Summary.CallerIntent, StringComparison.Ordinal);
         Assert.Single((await harness.Calls.Calls.AsNoTracking().ToListAsync()), call => call.Id.Value == result.CallId);
         await using var eventing = fixture.CreateEventing();
         Assert.True(await eventing.OutboxMessages.CountAsync(message => message.CorrelationId == request.CorrelationId) >= 10);
@@ -59,18 +59,34 @@ public sealed class SimulatedCallFlowTests(SimulatedCallFlowFixture fixture)
         Assert.Single((await harness.Calls.Calls.AsNoTracking().ToListAsync()), call => call.Id.Value == result.CallId);
     }
 
-    [Theory]
-    [InlineData("I need a human representative", "escalated")]
-    [InlineData("There is uncontrolled bleeding", "urgent_escalation")]
-    public async Task EscalationAndUrgentPathsCompleteSafely(string callerText, string expectedOutcome)
+    [Fact]
+    public async Task HumanTransferRequestCompletesWithoutClaimingUnavailableEscalation()
     {
         await using Harness harness = CreateHarness();
 
         SimulatedCallResult result = await harness.Service.RunAsync(Request(
-            SimulatedCallDirection.Inbound, new SimulatedCallerInput(Guid.NewGuid(), callerText)), default);
+            SimulatedCallDirection.Inbound,
+            new SimulatedCallerInput(Guid.NewGuid(), "I need a human representative")), default);
+
+        Assert.False(result.Escalated);
+        Assert.Equal("Completed", result.CallState);
+        Assert.Equal("Completed", result.ConversationState);
+        Assert.False(result.Summary?.Escalated);
+        Assert.Contains(result.Transcript, turn => turn.Speaker == "Assistant"
+            && turn.Text.Contains("not available", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task UrgentSafetyPathCompletesWithEscalation()
+    {
+        await using Harness harness = CreateHarness();
+
+        SimulatedCallResult result = await harness.Service.RunAsync(Request(
+            SimulatedCallDirection.Inbound,
+            new SimulatedCallerInput(Guid.NewGuid(), "There is uncontrolled bleeding")), default);
 
         Assert.True(result.Escalated);
-        Assert.Equal(expectedOutcome, result.Outcome);
+        Assert.Equal("urgent_escalation", result.Outcome);
         Assert.Equal("Completed", result.CallState);
         Assert.Equal("Completed", result.ConversationState);
         Assert.True(result.Summary?.Escalated);

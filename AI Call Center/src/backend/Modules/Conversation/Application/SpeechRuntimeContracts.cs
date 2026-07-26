@@ -13,10 +13,43 @@ public sealed record SimulatedUtteranceInput(string Text, string? Simulation = n
 
 public sealed record RuntimeFailure(string Code, string SafeMessage, bool Retryable);
 
+public sealed record AudioFormat(string Encoding, int SampleRateHz, int Channels, int BitsPerSample)
+{
+    public static AudioFormat Pcm16(int sampleRateHz = 8_000, int channels = 1) =>
+        new("audio/pcm", sampleRateHz, channels, 16);
+
+    public static AudioFormat SyntheticText => new("audio/x-purpleglass-text", 1, 1, 8);
+
+    public AudioFormat Validate()
+    {
+        if (string.IsNullOrWhiteSpace(Encoding) || Encoding.Length > 100)
+            throw new ArgumentException("A bounded audio encoding is required.", nameof(Encoding));
+        if (SampleRateHz is < 1 or > 192_000)
+            throw new ArgumentOutOfRangeException(nameof(SampleRateHz));
+        if (Channels is < 1 or > 2)
+            throw new ArgumentOutOfRangeException(nameof(Channels));
+        if (BitsPerSample is not (8 or 16 or 24 or 32))
+            throw new ArgumentOutOfRangeException(nameof(BitsPerSample));
+        return this;
+    }
+}
+
+public sealed record SpeechAudioInput(
+    AudioFormat Format,
+    ReadOnlyMemory<byte> Audio,
+    string IdempotencyKey);
+
+public sealed record SynthesizedAudioChunk(
+    long Sequence,
+    AudioFormat Format,
+    ReadOnlyMemory<byte> Audio,
+    bool IsFinal = false);
+
 public sealed record SpeechRecognitionRequest(
     RuntimeInvocationContext Context,
     string Language,
-    SimulatedUtteranceInput Input);
+    SimulatedUtteranceInput Input,
+    SpeechAudioInput? AudioInput = null);
 
 public sealed record SpeechRecognitionResult(
     string RecognizedText,
@@ -48,7 +81,8 @@ public sealed record SpeechSynthesisResult(
     TimeSpan? Duration,
     string VoiceId,
     IReadOnlyDictionary<string, string> Metadata,
-    RuntimeFailure? Failure = null);
+    RuntimeFailure? Failure = null,
+    IReadOnlyList<SynthesizedAudioChunk>? AudioChunks = null);
 
 public interface ISpeechSynthesizer
 {

@@ -36,11 +36,12 @@ Number purchasing, porting, regulatory setup, CNAM, branded caller ID, and STIR/
 
 Twilio calls:
 
-- `POST /telephony/twilio/inbound` to create or replay an inbound call and receive static TwiML.
-- `POST /telephony/twilio/answer` to receive the static outbound transport message.
+- `POST /telephony/twilio/inbound` to create or replay an inbound call and receive `<Connect><Stream>` TwiML after request-signature validation.
+- `POST /telephony/twilio/answer` to reconcile the outbound provider identity and receive `<Connect><Stream>` TwiML after request-signature validation.
 - `POST /telephony/twilio/status` for lifecycle changes.
+- `WSS /telephony/twilio/media` for the signature-validated, call-scoped realtime media stream.
 
-All three routes use the official Twilio `RequestValidator`, require `X-Twilio-Signature`, validate required provider metadata, and have IP-partitioned rate limits. Validation cannot be disabled by production configuration. Requests never choose a tenant: the normalized destination number or an existing provider identity resolves scope from persistence.
+The HTTP routes and WebSocket upgrade use the official Twilio `RequestValidator`, require `X-Twilio-Signature`, validate required provider metadata, and have IP-partitioned rate/concurrency limits. Validation cannot be disabled by production configuration. Requests never choose a tenant: the normalized destination number or an existing provider identity resolves scope from persistence. The media adapter also validates Account SID, Call SID, Stream SID, protocol version, inbound track, and 8 kHz mono mu-law format before starting a voice session.
 
 Browser mutations remain behind authenticated BFF sessions, permission policies, tenant/location checks, antiforgery validation, and per-user rate limits. Outbound and hangup requests are audited. Raw webhook bodies, signatures, credentials, and full phone numbers are not logged or used as metric dimensions.
 
@@ -77,4 +78,4 @@ A callback starts a new HTTP trace. PurpleGlass correlates it with durable call/
 
 Run migrations and start normally with `Telephony:Provider=None`. The BFF and integrations worker must start without Twilio credentials. Automated tests use the fake adapter and synthetic numbers only. Live inbound/outbound validation is optional and must use externally supplied test credentials and test phone numbers.
 
-Task 8 transports static provider-native TwiML only. Audio streaming, STT, LLM responses, TTS, recording, transfer, campaigns, SMS, and conversational AI are deferred.
+Task 9 replaces the static transport message with a provider-neutral realtime STT -> LLM -> TTS pipeline. See [Realtime Voice Conversation Pipeline](./architecture/REALTIME_VOICE_PIPELINE.md). Recording, transfer, campaigns, SMS, dental tools, and multi-provider failover remain deferred.

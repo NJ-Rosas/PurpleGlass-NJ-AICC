@@ -443,6 +443,9 @@ try {
     $env:Integrations__EnableOpenDental = 'false'
     $env:DataProtection__AllowSensitiveData = 'false'
     $env:Telephony__Provider = 'None'
+    $env:SpeechToText__Provider = 'Fake'
+    $env:LanguageModel__Provider = 'Fake'
+    $env:TextToSpeech__Provider = 'Fake'
 
     Write-Status 'Restoring backend tools and locked dependencies...'
     Invoke-CheckedCommand $dotnet @('tool', 'restore') 'Backend tool restore failed'
@@ -511,8 +514,7 @@ try {
     }
     Wait-ForHttpReady 'Frontend' $FrontendUrl
 
-    $everythingWasRunning = $webBffAlreadyRunning -and $workerAlreadyRunning -and $frontendAlreadyRunning
-    if (-not $NoBrowser -and -not $everythingWasRunning) {
+    if (-not $NoBrowser) {
         Start-Process $FrontendUrl | Out-Null
         Write-Status 'Opened the frontend in the default browser.'
     }

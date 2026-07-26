@@ -8,6 +8,7 @@ Read the documents in this order:
 2. [Backend Modules and Dependencies](./BACKEND_MODULES_AND_DEPENDENCIES.md) — module ownership, layer responsibilities, references, and prohibited dependencies.
 3. [Frontend and BFF Relationships](./FRONTEND_AND_BFF_RELATIONSHIPS.md) — React, Redux Toolkit, RTK Query, BFF endpoints, sessions, and realtime updates.
 4. [Runtime and Integration Flows](./RUNTIME_AND_INTEGRATION_FLOWS.md) — call, appointment, Open Dental, MQTT, notification, and audit interactions.
+5. [Realtime Voice Conversation Pipeline](./REALTIME_VOICE_PIPELINE.md) — signed media sockets, audio codecs, STT/LLM/TTS boundaries, turn sequencing, cancellation, and realtime transcript behavior.
 
 These documents are normative architecture guidance. When the implementation intentionally differs, record the decision in `docs/adr/` and update the affected documentation in the same change.
 

@@ -289,7 +289,9 @@ public sealed class DurablePathTests(DurablePathFixture fixture)
         ConversationStatusProjection first = await service.CreateAsync(command, default);
         ConversationStatusProjection replay = await service.CreateAsync(command, default);
         Assert.Equal(first.ConversationId, replay.ConversationId);
-        Assert.Equal(1, await conversationContext.Conversations.CountAsync());
+        Assert.Equal(1, await conversationContext.Conversations.CountAsync(conversation =>
+            conversation.TenantId == new PurpleGlass.Modules.Conversation.Domain.TenantId(tenant)
+            && conversation.CallSession == new PurpleGlass.Modules.Conversation.Domain.CallSessionReference(call.CallId)));
 
         (Guid otherTenant, CallSummary ineligible) = await CreateInboundAsync(answer: false);
         Guid otherLocation = await GetCallLocationAsync(otherTenant, ineligible.CallId);

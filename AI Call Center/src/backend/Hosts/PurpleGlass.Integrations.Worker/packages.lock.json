@@ -410,6 +410,7 @@
         "type": "Project",
         "dependencies": {
           "PurpleGlass.Modules.CallManagement.Application": "[1.0.0, )",
+          "PurpleGlass.Modules.Conversation.Application": "[1.0.0, )",
           "Twilio": "[7.14.9, )"
         }
       },
@@ -460,6 +461,25 @@
           "PurpleGlass.Eventing": "[1.0.0, )",
           "PurpleGlass.Modules.CallManagement.Application": "[1.0.0, )",
           "PurpleGlass.Modules.CallManagement.Domain": "[1.0.0, )"
+        }
+      },
+      "purpleglass.modules.conversation.application": {
+        "type": "Project",
+        "dependencies": {
+          "PurpleGlass.Eventing": "[1.0.0, )",
+          "PurpleGlass.Modules.CallManagement.Contracts": "[1.0.0, )",
+          "PurpleGlass.Modules.Conversation.Contracts": "[1.0.0, )",
+          "PurpleGlass.Modules.Conversation.Domain": "[1.0.0, )",
+          "PurpleGlass.Observability": "[1.0.0, )"
+        }
+      },
+      "purpleglass.modules.conversation.contracts": {
+        "type": "Project"
+      },
+      "purpleglass.modules.conversation.domain": {
+        "type": "Project",
+        "dependencies": {
+          "PurpleGlass.SharedKernel": "[1.0.0, )"
         }
       },
       "purpleglass.observability": {

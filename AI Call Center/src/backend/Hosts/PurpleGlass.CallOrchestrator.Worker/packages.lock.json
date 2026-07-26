@@ -96,7 +96,8 @@
           "PurpleGlass.Eventing": "[1.0.0, )",
           "PurpleGlass.Modules.CallManagement.Contracts": "[1.0.0, )",
           "PurpleGlass.Modules.Conversation.Contracts": "[1.0.0, )",
-          "PurpleGlass.Modules.Conversation.Domain": "[1.0.0, )"
+          "PurpleGlass.Modules.Conversation.Domain": "[1.0.0, )",
+          "PurpleGlass.Observability": "[1.0.0, )"
         }
       },
       "purpleglass.modules.conversation.contracts": {

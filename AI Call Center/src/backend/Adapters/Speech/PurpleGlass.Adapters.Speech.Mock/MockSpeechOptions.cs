@@ -8,5 +8,5 @@ public sealed record MockSpeechOptions
     public bool FailRecognition { get; init; }
     public bool FailSynthesis { get; init; }
     public IReadOnlySet<string> SupportedVoices { get; init; } =
-        new HashSet<string>(["calm-a", "bright-b"], StringComparer.OrdinalIgnoreCase);
+        new HashSet<string>(["calm-a", "bright-b", "alloy"], StringComparer.OrdinalIgnoreCase);
 }

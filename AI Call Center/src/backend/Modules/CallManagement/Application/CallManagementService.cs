@@ -148,6 +148,37 @@ public sealed class CallManagementService(ICallStore store, TimeProvider timePro
         return Map(call);
     }
 
+    public async Task<VoiceCallContext> ResolveVoiceCallAsync(
+        string provider,
+        string providerCallId,
+        CancellationToken cancellationToken)
+    {
+        CallSession call = await Telephony.GetByProviderIdentityAsync(provider, providerCallId, false, cancellationToken)
+            ?? throw CallApplicationException.NotFound();
+        return MapVoiceContext(call);
+    }
+
+    public async Task<VoiceCallContext> ConnectVoiceMediaAsync(
+        string provider,
+        string providerCallId,
+        CancellationToken cancellationToken)
+    {
+        CallSession call = await Telephony.GetByProviderIdentityAsync(provider, providerCallId, true, cancellationToken)
+            ?? throw CallApplicationException.NotFound();
+        if (!string.Equals(call.Provider, provider, StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(call.ProviderCallId, providerCallId, StringComparison.Ordinal))
+            throw CallApplicationException.NotFound();
+        if (call.State is CallState.Completed or CallState.Failed)
+            throw new CallApplicationException("call_not_eligible", "The call is no longer eligible for a voice session.");
+
+        DateTimeOffset now = timeProvider.GetUtcNow();
+        EnsureAnswered(call, now);
+        if (call.State == CallState.Answered)
+            Transition(call, call.StartConversation, now);
+        await SaveAsync(cancellationToken);
+        return MapVoiceContext(call);
+    }
+
     public async Task<CallSummary> RequestHangupAsync(RequestCallHangup command, CancellationToken cancellationToken)
     {
         CallSession call = await Load(command.TenantId, command.CallId, cancellationToken);
@@ -390,6 +421,11 @@ public sealed class CallManagementService(ICallStore store, TimeProvider timePro
         ? throw new CallApplicationException("invalid_idempotency_key", "A bounded idempotency key is required.") : value.Trim();
     private static string ToTopic(string value) => string.Concat(value.Select((c, i) => char.IsUpper(c) && i > 0 ? $"-{char.ToLowerInvariant(c)}" : char.ToLowerInvariant(c).ToString()));
     private static CallSummary Map(CallSession call) => new(call.Id.Value, call.Direction.ToString(), call.State.ToString(), call.CreatedAtUtc, call.CompletedAtUtc, call.Outcome, null, call.RecordingReference, call.Version, call.Provider, call.FromNumber, call.ToNumber);
+    private static VoiceCallContext MapVoiceContext(CallSession call) => new(
+        call.Id.Value, call.TenantId.Value, call.LocationId.Value, call.CorrelationId,
+        call.Direction.ToString(), call.State.ToString(), call.Provider,
+        call.ProviderCallId ?? throw new CallApplicationException("provider_identity_unavailable", "The provider call identity is unavailable."),
+        call.Version);
     private static TelephonyNumberSummary Map(TelephonyNumber number) => new(number.Id, number.TenantId.Value,
         number.LocationId?.Value, number.Provider, number.NormalizedNumber, number.InboundEnabled,
         number.OutboundEnabled, number.IsActive, number.Version);

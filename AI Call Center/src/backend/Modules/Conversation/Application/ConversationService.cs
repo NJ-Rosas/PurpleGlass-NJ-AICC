@@ -132,6 +132,7 @@ public sealed class ConversationService(IConversationStore store, ICallEligibili
         try
         {
             turn = conversation.AddTurn(new ConversationTurnId(command.TurnId), speaker, command.Text, now,
+            startedAtUtc: command.StartedAtUtc, endedAtUtc: command.EndedAtUtc,
             recognitionConfidence: command.RecognitionConfidence, safetyFlagged: command.SafetyFlagged, escalationFlagged: command.EscalationFlagged);
         }
         catch (InvalidOperationException exception) { throw ConversationApplicationException.InvalidState(exception); }

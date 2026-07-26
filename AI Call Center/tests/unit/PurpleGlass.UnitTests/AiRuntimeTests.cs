@@ -34,26 +34,30 @@ public sealed class AiRuntimeTests
     }
 
     [Theory]
-    [InlineData("What are your hours?", "office-hours", "Monday through Friday")]
-    [InlineData("Where is your location?", "office-location", "100 Prototype Avenue")]
-    [InlineData("My name is Alex Example", "caller-name", "reason for your call")]
-    public async Task AiHandlesApprovedOfficeScenarios(string callerText, string intent, string expectedText)
+    [InlineData("What are your hours?")]
+    [InlineData("Where is your location?")]
+    [InlineData("My name is Alex Example")]
+    public async Task AiKeepsLegacyOfficeInputsInsideGenericTaskNineScope(string callerText)
     {
         AiResponseResult result = await CreateAi().GenerateAsync(Request(callerText), default);
 
-        Assert.Equal(intent, result.Intent);
-        Assert.Contains(expectedText, result.AssistantText, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("general-test", result.Intent);
+        Assert.Equal(
+            "Thanks for the test message. This development assistant can continue a general voice conversation.",
+            result.AssistantText);
         Assert.Null(result.Failure);
     }
 
     [Fact]
-    public async Task AiRequestsHumanEscalation()
+    public async Task AiReportsHumanTransferAsUnavailableWithoutClaimingAction()
     {
         AiResponseResult result = await CreateAi().GenerateAsync(Request("I need a human representative"), default);
 
-        Assert.True(result.EscalationRequested);
-        Assert.Equal("human_requested", result.EscalationReason);
-        Assert.True(result.ShouldEndConversation);
+        Assert.Equal("human-unavailable", result.Intent);
+        Assert.False(result.EscalationRequested);
+        Assert.Null(result.EscalationReason);
+        Assert.False(result.ShouldEndConversation);
+        Assert.Equal("Human transfer is not available in this development assistant.", result.AssistantText);
     }
 
     [Fact]
@@ -63,8 +67,10 @@ public sealed class AiRuntimeTests
 
         Assert.True(result.EscalationRequested);
         Assert.Equal("urgent-safety", result.Intent);
-        Assert.Contains("cannot diagnose", result.AssistantText, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("can't provide medical advice", result.AssistantText, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("local emergency services", result.AssistantText, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("you have", result.AssistantText, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("staff", result.AssistantText, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -73,7 +79,8 @@ public sealed class AiRuntimeTests
         AiResponseResult result = await CreateAi().GenerateAsync(Request("My tooth hurts, diagnose it"), default);
 
         Assert.Equal("medical-question", result.Intent);
-        Assert.Contains("cannot diagnose", result.AssistantText, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("can't provide medical advice", result.AssistantText, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("staff", result.AssistantText, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

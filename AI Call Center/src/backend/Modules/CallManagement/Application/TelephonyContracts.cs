@@ -38,6 +38,17 @@ public sealed record TelephonyProviderResult(bool Succeeded, string? SafeErrorCo
 
 public sealed record TelephonyConfigurationStatus(string Provider, bool Enabled, bool Configured, string State);
 
+public sealed record VoiceCallContext(
+    Guid CallId,
+    Guid TenantId,
+    Guid LocationId,
+    Guid CorrelationId,
+    string Direction,
+    string State,
+    string Provider,
+    string ProviderCallId,
+    long Version);
+
 public sealed record TelephonyDispatch(
     Guid OperationId,
     string OperationType,

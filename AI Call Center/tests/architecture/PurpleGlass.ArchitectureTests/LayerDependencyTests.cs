@@ -1,6 +1,9 @@
 using System.Reflection;
 using PurpleGlass.Adapters.AI.Mock;
+using PurpleGlass.Adapters.AI.OpenAI;
+using PurpleGlass.Adapters.Audio.Fake;
 using PurpleGlass.Adapters.Speech.Mock;
+using PurpleGlass.Adapters.Speech.OpenAI;
 using PurpleGlass.CallOrchestrator.Worker;
 using PurpleGlass.Modules.Audit.Application;
 using PurpleGlass.Modules.Audit.Domain;
@@ -138,6 +141,23 @@ public sealed class LayerDependencyTests
         AssertAssembliesDoNotReference(
             ApplicationAssemblies.Concat(DomainAssemblies),
             ["OpenAI", "Anthropic", "Azure.AI", "Whisper", "ElevenLabs", "Twilio"]);
+    }
+
+    [Fact]
+    public void RealtimeVoiceProvidersImplementNeutralPortsAndStayOutsideDomains()
+    {
+        Assert.True(typeof(IAiConversationRuntime).IsAssignableFrom(typeof(OpenAiConversationRuntime)));
+        Assert.True(typeof(ISpeechRecognizer).IsAssignableFrom(typeof(OpenAiSpeechRecognizer)));
+        Assert.True(typeof(ISpeechSynthesizer).IsAssignableFrom(typeof(OpenAiSpeechSynthesizer)));
+        Assert.True(typeof(IRealtimeAudioTransport).IsAssignableFrom(typeof(FakeRealtimeAudioTransport)));
+        Assert.True(typeof(IRealtimeAudioTransport).IsAssignableFrom(typeof(TwilioRealtimeAudioTransport)));
+
+        AssertAssembliesDoNotReference(
+            [typeof(CallManagementDomainAssembly).Assembly, typeof(ConversationDomainAssembly).Assembly],
+            ["OpenAI", "Twilio", "PurpleGlass.Adapters"]);
+        AssertAssembliesDoNotReference(
+            [typeof(OpenAiConversationRuntime).Assembly, typeof(OpenAiSpeechRecognizer).Assembly],
+            ["Microsoft.EntityFrameworkCore", "Npgsql", ".Infrastructure", "Twilio"]);
     }
 
     [Fact]

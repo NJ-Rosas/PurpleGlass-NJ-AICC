@@ -1,6 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
     <ProjectReference Include="..\..\..\BuildingBlocks\PurpleGlass.Eventing\PurpleGlass.Eventing.csproj" />
+    <ProjectReference Include="..\..\..\BuildingBlocks\PurpleGlass.Observability\PurpleGlass.Observability.csproj" />
     <ProjectReference Include="..\..\CallManagement\Contracts\PurpleGlass.Modules.CallManagement.Contracts.csproj" />
     <ProjectReference Include="..\Contracts\PurpleGlass.Modules.Conversation.Contracts.csproj" />
     <ProjectReference Include="..\Domain\PurpleGlass.Modules.Conversation.Domain.csproj" />

@@ -33,10 +33,13 @@
     <ProjectReference Include="..\..\..\src\backend\Modules\Identity\Domain\PurpleGlass.Modules.Identity.Domain.csproj" />
     <ProjectReference Include="..\..\..\src\backend\Hosts\PurpleGlass.WebBff\PurpleGlass.WebBff.csproj" />
     <ProjectReference Include="..\..\..\src\backend\Adapters\AI\PurpleGlass.Adapters.AI.Mock\PurpleGlass.Adapters.AI.Mock.csproj" />
+    <ProjectReference Include="..\..\..\src\backend\Adapters\AI\PurpleGlass.Adapters.AI.OpenAI\PurpleGlass.Adapters.AI.OpenAI.csproj" />
     <ProjectReference Include="..\..\..\src\backend\Adapters\Speech\PurpleGlass.Adapters.Speech.Mock\PurpleGlass.Adapters.Speech.Mock.csproj" />
+    <ProjectReference Include="..\..\..\src\backend\Adapters\Speech\PurpleGlass.Adapters.Speech.OpenAI\PurpleGlass.Adapters.Speech.OpenAI.csproj" />
     <ProjectReference Include="..\..\..\src\backend\Hosts\PurpleGlass.CallOrchestrator.Worker\PurpleGlass.CallOrchestrator.Worker.csproj" />
     <ProjectReference Include="..\..\..\src\backend\Adapters\Telephony\PurpleGlass.Adapters.Telephony.Fake\PurpleGlass.Adapters.Telephony.Fake.csproj" />
     <ProjectReference Include="..\..\..\src\backend\Adapters\Telephony\PurpleGlass.Adapters.Telephony.Twilio\PurpleGlass.Adapters.Telephony.Twilio.csproj" />
+    <ProjectReference Include="..\..\..\src\backend\Adapters\Audio\PurpleGlass.Adapters.Audio.Fake\PurpleGlass.Adapters.Audio.Fake.csproj" />
   </ItemGroup>
 
 </Project>

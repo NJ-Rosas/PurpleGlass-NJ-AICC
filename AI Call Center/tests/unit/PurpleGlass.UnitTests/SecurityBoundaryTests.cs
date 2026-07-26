@@ -82,6 +82,16 @@ public sealed class SecurityBoundaryTests
     }
 
     [Fact]
+    public void DevelopmentAllowsExplicitRealAiAndSpeechWithSyntheticDataBoundary()
+    {
+        ProductionSecurityValidator.Validate(
+            new SecurityOptions { AllowSyntheticDataOnly = true },
+            new SafetyOptions { EnableRealAI = true, EnableRealSpeech = true },
+            new TestEnvironment("Development"),
+            "*");
+    }
+
+    [Fact]
     public void ProductionAcceptsCompleteSafeConfiguration() =>
         ProductionSecurityValidator.Validate(
             ValidProduction(), new SafetyOptions(), new TestEnvironment("Production"), "app.example.test");

@@ -506,7 +506,25 @@
           "PurpleGlass.Modules.Conversation.Application": "[1.0.0, )"
         }
       },
+      "purpleglass.adapters.ai.openai": {
+        "type": "Project",
+        "dependencies": {
+          "PurpleGlass.Modules.Conversation.Application": "[1.0.0, )"
+        }
+      },
+      "purpleglass.adapters.audio.fake": {
+        "type": "Project",
+        "dependencies": {
+          "PurpleGlass.Modules.Conversation.Application": "[1.0.0, )"
+        }
+      },
       "purpleglass.adapters.speech.mock": {
+        "type": "Project",
+        "dependencies": {
+          "PurpleGlass.Modules.Conversation.Application": "[1.0.0, )"
+        }
+      },
+      "purpleglass.adapters.speech.openai": {
         "type": "Project",
         "dependencies": {
           "PurpleGlass.Modules.Conversation.Application": "[1.0.0, )"
@@ -522,6 +540,7 @@
         "type": "Project",
         "dependencies": {
           "PurpleGlass.Modules.CallManagement.Application": "[1.0.0, )",
+          "PurpleGlass.Modules.Conversation.Application": "[1.0.0, )",
           "Twilio": "[7.14.9, )"
         }
       },
@@ -620,7 +639,8 @@
           "PurpleGlass.Eventing": "[1.0.0, )",
           "PurpleGlass.Modules.CallManagement.Contracts": "[1.0.0, )",
           "PurpleGlass.Modules.Conversation.Contracts": "[1.0.0, )",
-          "PurpleGlass.Modules.Conversation.Domain": "[1.0.0, )"
+          "PurpleGlass.Modules.Conversation.Domain": "[1.0.0, )",
+          "PurpleGlass.Observability": "[1.0.0, )"
         }
       },
       "purpleglass.modules.conversation.contracts": {
@@ -714,6 +734,10 @@
         "dependencies": {
           "MQTTnet": "[5.2.0.1603, )",
           "Microsoft.AspNetCore.Authentication.OpenIdConnect": "[10.0.10, )",
+          "PurpleGlass.Adapters.AI.Mock": "[1.0.0, )",
+          "PurpleGlass.Adapters.AI.OpenAI": "[1.0.0, )",
+          "PurpleGlass.Adapters.Speech.Mock": "[1.0.0, )",
+          "PurpleGlass.Adapters.Speech.OpenAI": "[1.0.0, )",
           "PurpleGlass.Adapters.Telephony.Fake": "[1.0.0, )",
           "PurpleGlass.Adapters.Telephony.Twilio": "[1.0.0, )",
           "PurpleGlass.Application.Abstractions": "[1.0.0, )",

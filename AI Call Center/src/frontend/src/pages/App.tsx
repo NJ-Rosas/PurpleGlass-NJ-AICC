@@ -16,7 +16,15 @@ import {
 import { store } from '../app/store'
 import { reportOperationalFailure } from '../services/operationalDiagnostics'
 import { DeadLetterOperations } from './DeadLetterOperations'
-import { HangupControl, TelephonyControls } from './TelephonyControls'
+import { TelephonyControls } from './TelephonyControls'
+import {
+  isTerminalCallState,
+  parseVoiceStateEvent,
+  VoiceCallDetail,
+  withVoiceState,
+  withoutVoiceState,
+  type VoiceStatesByCall,
+} from './VoiceCallDetail'
 
 export function App() {
   const { data: session, isLoading: sessionLoading, isError: sessionError, refetch: refetchSession } = useGetSessionQuery()
@@ -31,6 +39,7 @@ export function App() {
   const { data: telephonyStatus } = useGetTelephonyStatusQuery(undefined, { skip: !session })
   const [startCall, startCallState] = useStartOutboundCallMutation()
   const [hangupCall, hangupState] = useHangupCallMutation()
+  const [voiceStates, setVoiceStates] = useState<VoiceStatesByCall>({})
   const [view, setView] = useState<'dashboard' | 'dead-letters'>('dashboard')
   const selectedCall = selectedCallId ?? calls[0]?.callId
   const { data: callDetails, isLoading: detailsLoading } = useGetCallDetailsQuery(selectedCall ?? '', {
@@ -40,6 +49,16 @@ export function App() {
   useEffect(() => {
     if (data) setName(data.locationDisplayName)
   }, [data])
+
+  useEffect(() => {
+    if (!session) setVoiceStates({})
+  }, [session])
+
+  useEffect(() => {
+    if (callDetails && isTerminalCallState(callDetails.call.state)) {
+      setVoiceStates((current) => withoutVoiceState(current, callDetails.call.callId))
+    }
+  }, [callDetails?.call.callId, callDetails?.call.state])
 
   useEffect(() => {
     if (!session) return
@@ -68,6 +87,11 @@ export function App() {
       'conversation-completed',
     ]
     callEventTypes.forEach((eventType) => events.addEventListener(eventType, refreshCalls))
+    events.addEventListener('voice-state-changed', (event) => {
+      const update = parseVoiceStateEvent((event as MessageEvent<string>).data)
+      if (update) setVoiceStates((current) => withVoiceState(current, update))
+      else reportOperationalFailure('realtime.voice_state_invalid')
+    })
     events.addEventListener('dead-letter-recovered', () => store.dispatch(prototypeApi.util.invalidateTags(['DeadLetters'])))
     return () => events.close()
   }, [session])
@@ -190,43 +214,13 @@ export function App() {
             </div>
 
             <div className="panel call-detail">
-              <p className="eyebrow">CALL REVIEW</p>
               {!selectedCall && <div className="empty-state">Select a call to review its transcript.</div>}
               {detailsLoading && <p className="subtle">Loading transcript…</p>}
-              {callDetails && (
-                <>
-                  <div className="detail-title">
-                    <div>
-                      <h3>{callDetails.call.direction} call</h3>
-                      <p className="subtle">{callDetails.call.outcome ?? callDetails.call.state}</p>
-                      <p className="subtle">{callDetails.call.provider} · {callDetails.call.fromNumber} → {callDetails.call.toNumber}</p>
-                    </div>
-                    <span className={`call-state ${callDetails.call.state.toLowerCase()}`}>{callDetails.call.state}</span>
-                  </div>
-                  <HangupControl canHangup={session.permissions.includes('calls.outbound.initiate')
-                    && !['Completed', 'Failed'].includes(callDetails.call.state)}
-                    loading={hangupState.isLoading} error={hangupState.isError}
-                    onHangup={() => hangupCall(callDetails.call.callId)} />
-                  {callDetails.conversation?.summary && (
-                    <div className="summary-card">
-                      <strong>AI summary</strong>
-                      <p>{callDetails.conversation.summary.summary}</p>
-                    </div>
-                  )}
-                  {callDetails.conversation?.escalated && (
-                    <div className="escalation">Escalated: {callDetails.conversation.escalationReason ?? 'review required'}</div>
-                  )}
-                  <div className="transcript" aria-label="Call transcript">
-                    {callDetails.conversation?.transcript.map((turn) => (
-                      <div key={turn.turnId} className={`turn ${turn.speaker.toLowerCase()}`}>
-                        <span>{turn.speaker}</span>
-                        <p>{turn.text}</p>
-                      </div>
-                    ))}
-                    {!callDetails.conversation && <div className="empty-state">No conversation was recorded for this call.</div>}
-                  </div>
-                </>
-              )}
+              {callDetails && <VoiceCallDetail details={callDetails}
+                voiceState={voiceStates[callDetails.call.callId]}
+                canHangup={session.permissions.includes('calls.outbound.initiate')}
+                hangupLoading={hangupState.isLoading} hangupError={hangupState.isError}
+                onHangup={() => { void hangupCall(callDetails.call.callId) }} />}
             </div>
           </section>
 

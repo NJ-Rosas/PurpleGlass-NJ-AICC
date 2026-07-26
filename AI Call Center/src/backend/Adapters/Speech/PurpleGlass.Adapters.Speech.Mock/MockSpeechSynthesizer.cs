@@ -24,12 +24,14 @@ public sealed class MockSpeechSynthesizer(MockSpeechOptions options, TimeProvide
 
         string hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
             $"{request.Voice.VoiceId}|{request.Language}|{request.Text}")))[..16].ToLowerInvariant();
+        byte[] audio = Encoding.UTF8.GetBytes(request.Text);
         return new(
             $"memory://mock-speech/{hash}",
             "audio/x-purpleglass-simulator",
             TimeSpan.FromMilliseconds(Math.Max(250, request.Text.Length * 35)),
             request.Voice.VoiceId,
-            new Dictionary<string, string> { ["adapter"] = AdapterKey, ["quality"] = "synthetic" });
+            new Dictionary<string, string> { ["adapter"] = AdapterKey, ["quality"] = "synthetic" },
+            AudioChunks: [new SynthesizedAudioChunk(1, AudioFormat.SyntheticText, audio, true)]);
     }
 
     private static SpeechSynthesisResult Failure(string voiceId, string code, string message) =>
