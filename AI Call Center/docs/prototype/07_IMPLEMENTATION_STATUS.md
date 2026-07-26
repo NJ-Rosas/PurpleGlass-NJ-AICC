@@ -13,6 +13,9 @@ Status date: 2026-07-24
 
 ## Proven locally
 
+- Task 5 adds a provider-neutral OpenID Connect boundary, BFF-owned HttpOnly cookie sessions, trusted membership-derived tenant/location context, centralized permission policies, CSRF protection, secured SSE, browser security headers, rate limits, stable security errors, sanitized security audits, and production startup kill switches.
+- Development login maps only two predefined synthetic identities and is rejected outside Development; React stores no access token, refresh token, cookie, provider secret, or unrestricted tenant selector.
+
 - The .NET/C# solution builds with zero warnings and errors.
 - PostgreSQL 18, Mosquitto 2.1.2, and Valkey 8.1.8 are healthy in Docker Compose.
 - EF Core migrations create `tenancy`, `audit`, and `eventing` schemas and seed synthetic data.
@@ -34,7 +37,7 @@ Status date: 2026-07-24
 
 ## Still open
 
-- Production identity, authorization policies, cookies, CSRF, and security headers.
+- Selection and live validation of the production OIDC provider, durable identity administration, key-store deployment, and full security operations.
 - Outbox leasing, inbox deduplication, dead letters, and broker outage automation.
 - Browser/dashboard delivery for the durable call and transcript facts.
 - Frontend unit/component tests and a full browser end-to-end test suite.

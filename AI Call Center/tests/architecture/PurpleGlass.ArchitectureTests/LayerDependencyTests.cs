@@ -12,6 +12,8 @@ using PurpleGlass.Modules.Conversation.Application;
 using PurpleGlass.Modules.Conversation.Contracts;
 using PurpleGlass.Modules.Conversation.Domain;
 using PurpleGlass.Modules.Conversation.Infrastructure;
+using PurpleGlass.Modules.Identity.Application;
+using PurpleGlass.Modules.Identity.Domain;
 using PurpleGlass.Modules.Tenancy.Application;
 using PurpleGlass.Modules.Tenancy.Domain;
 
@@ -25,6 +27,7 @@ public sealed class LayerDependencyTests
         typeof(AuditDomainAssembly).Assembly,
         typeof(CallManagementDomainAssembly).Assembly,
         typeof(ConversationDomainAssembly).Assembly,
+        typeof(IdentityDomainAssembly).Assembly,
     ];
 
     private static readonly Assembly[] ApplicationAssemblies =
@@ -33,6 +36,7 @@ public sealed class LayerDependencyTests
         typeof(AuditApplicationAssembly).Assembly,
         typeof(CallManagementApplicationAssembly).Assembly,
         typeof(ConversationApplicationAssembly).Assembly,
+        typeof(IdentityApplicationAssembly).Assembly,
     ];
 
     private static readonly Assembly[] InfrastructureAssemblies =
@@ -138,6 +142,21 @@ public sealed class LayerDependencyTests
     public void DomainAssembliesDoNotReferenceCallOrchestrator()
     {
         AssertAssembliesDoNotReference(DomainAssemblies, ["PurpleGlass.CallOrchestrator"]);
+    }
+
+    [Fact]
+    public void IdentityRulesRemainProviderAndTransportNeutral()
+    {
+        AssertAssembliesDoNotReference(
+            [typeof(IdentityDomainAssembly).Assembly, typeof(IdentityApplicationAssembly).Assembly],
+            ["Microsoft.AspNetCore", "Microsoft.EntityFrameworkCore", "OpenIdConnect", "OAuth"]);
+    }
+
+    [Fact]
+    public void RequestContextDoesNotDependOnBrowserSessionTypes()
+    {
+        Assembly applicationAbstractions = typeof(PurpleGlass.Application.Abstractions.RequestContext).Assembly;
+        AssertAssembliesDoNotReference([applicationAbstractions], ["Microsoft.AspNetCore", "Cookie", "OpenIdConnect"]);
     }
 
     [Fact]

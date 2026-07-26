@@ -86,6 +86,29 @@ npm run dev --prefix src/frontend -- --host 127.0.0.1
 
 Open <http://127.0.0.1:5173>. During development, Vite proxies browser `/bff/*` calls to the BFF.
 
+The browser begins unauthenticated. Choose the predefined synthetic administrator or read-only identity. The BFF first issues an HttpOnly antiforgery cookie and returns a request token; React sends that token in `X-CSRF-TOKEN` for login, logout, and mutations. Logout is the avatar button in the left rail. No access token, refresh token, session cookie, tenant selector, or MQTT credential is exposed to JavaScript.
+
+Development authentication requires both the Development environment and `Security:AllowDevelopmentAuthentication=true`. Production requires an HTTPS origin, restricted `AllowedHosts`, persistent data-protection keys, complete OIDC authorization-code configuration, and server-owned identity/membership mappings. It rejects development authentication, real provider flags, Open Dental, sensitive-data mode, and disabling synthetic-only mode.
+
+Role permissions in this slice:
+
+| Capability | Tenant administrator | Office manager | Staff | Read-only |
+|---|---:|---:|---:|---:|
+| View calls/transcripts/summaries | Yes | Yes | Yes | Yes |
+| Initiate outbound calls | Yes | Yes | Yes | No |
+| Manage location settings | Yes | Yes | No | No |
+| Manage tenant settings | Yes | No | No | No |
+| View audit records | Yes | Yes | No | No |
+
+Run security validation with:
+
+```bash
+dotnet test tests/unit/PurpleGlass.UnitTests/PurpleGlass.UnitTests.csproj
+dotnet test tests/integration/PurpleGlass.IntegrationTests/PurpleGlass.IntegrationTests.csproj
+dotnet test tests/architecture/PurpleGlass.ArchitectureTests/PurpleGlass.ArchitectureTests.csproj
+npm test --prefix src/frontend -- --run
+```
+
 ## Verify
 
 ```bash

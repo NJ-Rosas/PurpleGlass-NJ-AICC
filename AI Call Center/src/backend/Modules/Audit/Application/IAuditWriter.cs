@@ -5,4 +5,6 @@ namespace PurpleGlass.Modules.Audit.Application;
 public interface IAuditWriter
 {
     void Add(AuditRecord record);
+
+    Task SaveChangesAsync(CancellationToken cancellationToken);
 }

@@ -1,19 +1,26 @@
 import { FormEvent, useEffect, useState } from 'react'
 import {
   prototypeApi,
+  clearCsrfToken,
+  useDevelopmentLoginMutation,
   useGetCallDetailsQuery,
   useGetCallsQuery,
+  useGetSessionQuery,
   useGetTenantSummaryQuery,
+  useLogoutMutation,
   useUpdateLocationNameMutation,
 } from '../services/prototypeApi'
 import { store } from '../app/store'
 
 export function App() {
-  const { data, isLoading, isError } = useGetTenantSummaryQuery()
+  const { data: session, isLoading: sessionLoading, isError: sessionError, refetch: refetchSession } = useGetSessionQuery()
+  const [developmentLogin, loginState] = useDevelopmentLoginMutation()
+  const [logout] = useLogoutMutation()
+  const { data, isLoading, isError } = useGetTenantSummaryQuery(undefined, { skip: !session })
   const [updateName, updateState] = useUpdateLocationNameMutation()
   const [name, setName] = useState('')
   const [realtime, setRealtime] = useState<'connecting' | 'live' | 'offline'>('connecting')
-  const { data: calls = [], isLoading: callsLoading, isError: callsError } = useGetCallsQuery()
+  const { data: calls = [], isLoading: callsLoading, isError: callsError } = useGetCallsQuery(undefined, { skip: !session })
   const [selectedCallId, setSelectedCallId] = useState<string>()
   const selectedCall = selectedCallId ?? calls[0]?.callId
   const { data: callDetails, isLoading: detailsLoading } = useGetCallDetailsQuery(selectedCall ?? '', {
@@ -25,6 +32,7 @@ export function App() {
   }, [data])
 
   useEffect(() => {
+    if (!session) return
     const events = new EventSource('/bff/v1/events')
     events.onopen = () => setRealtime('live')
     events.onerror = () => setRealtime('offline')
@@ -45,13 +53,38 @@ export function App() {
     ]
     callEventTypes.forEach((eventType) => events.addEventListener(eventType, refreshCalls))
     return () => events.close()
-  }, [])
+  }, [session])
+
+  async function login(user: 'administrator' | 'read-only') {
+    await developmentLogin(user).unwrap()
+    await refetchSession()
+  }
+
+  async function endSession() {
+    await logout().unwrap()
+    clearCsrfToken()
+    store.dispatch(prototypeApi.util.resetApiState())
+  }
 
   async function submit(event: FormEvent) {
     event.preventDefault()
     if (!data || !name.trim()) return
     await updateName({ locationId: data.locationId, displayName: name.trim(), expectedVersion: data.version })
   }
+
+  if (sessionLoading) return <main className="auth-shell"><section className="panel">Checking your secure session…</section></main>
+  if (sessionError || !session) return (
+    <main className="auth-shell">
+      <section className="panel auth-card">
+        <p className="eyebrow">DEVELOPMENT AUTHENTICATION</p>
+        <h1>Sign in to PurpleGlass</h1>
+        <p className="subtle">Synthetic identities only. Never enter patient information.</p>
+        <button onClick={() => login('administrator')} disabled={loginState.isLoading}>Sign in as administrator</button>
+        <button onClick={() => login('read-only')} disabled={loginState.isLoading}>Sign in as read-only user</button>
+        {loginState.isError && <p className="error-text">The development sign-in was rejected.</p>}
+      </section>
+    </main>
+  )
 
   return (
     <div className="shell">
@@ -63,15 +96,15 @@ export function App() {
           <button aria-label="Patients">♙</button>
           <button aria-label="Settings">⚙</button>
         </nav>
-        <div className="avatar">NI</div>
+        <button className="avatar" onClick={endSession} aria-label="Log out">{session.displayName.slice(0, 2).toUpperCase()}</button>
       </aside>
 
       <main>
         <header>
           <div>
             <p className="eyebrow">AI CALL CENTER</p>
-            <h1>Good evening, Nilve</h1>
-            <p className="subtle">Your dental office command center is ready.</p>
+            <h1>Welcome, {session.displayName}</h1>
+            <p className="subtle">{session.role} · secure {session.authenticationMethod} session</p>
           </div>
           <div className={`status ${realtime}`}><span /> {realtime === 'live' ? 'Realtime connected' : realtime}</div>
         </header>

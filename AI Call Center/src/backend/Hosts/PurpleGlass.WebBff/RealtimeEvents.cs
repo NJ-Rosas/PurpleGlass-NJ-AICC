@@ -34,7 +34,7 @@ public sealed class RealtimeEventHub
 {
     private readonly ConcurrentDictionary<Guid, Subscriber> subscribers = new();
 
-    public RealtimeSubscription Subscribe(Guid tenantId)
+    public RealtimeSubscription Subscribe(Guid tenantId, Guid? locationId = null)
     {
         Guid id = Guid.NewGuid();
         Channel<RealtimeEvent> channel = Channel.CreateBounded<RealtimeEvent>(new BoundedChannelOptions(20)
@@ -43,7 +43,7 @@ public sealed class RealtimeEventHub
             SingleReader = true,
             SingleWriter = false
         });
-        subscribers[id] = new Subscriber(tenantId, channel);
+        subscribers[id] = new Subscriber(tenantId, locationId, channel);
         return new RealtimeSubscription(id, channel.Reader, Remove);
     }
 
@@ -66,7 +66,7 @@ public sealed class RealtimeEventHub
         }
     }
 
-    private sealed record Subscriber(Guid TenantId, Channel<RealtimeEvent> Channel);
+    private sealed record Subscriber(Guid TenantId, Guid? LocationId, Channel<RealtimeEvent> Channel);
 }
 
 public sealed class RealtimeSubscription(
