@@ -1,6 +1,10 @@
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Mvc;
 using PurpleGlass.Application.Abstractions;
+using PurpleGlass.Modules.CallManagement.Application;
+using PurpleGlass.Modules.CallManagement.Infrastructure;
+using PurpleGlass.Modules.Conversation.Application;
+using PurpleGlass.Modules.Conversation.Infrastructure;
 using PurpleGlass.Modules.Tenancy.Application;
 using PurpleGlass.Modules.Tenancy.Contracts;
 using PurpleGlass.Modules.Tenancy.Infrastructure;
@@ -27,6 +31,8 @@ builder.Services.AddScoped<IRequestContextAccessor>(provider =>
     provider.GetRequiredService<PrototypeRequestContextAccessor>());
 builder.Services.AddTenancyInfrastructure(connectionString);
 builder.Services.AddScoped<TenancyService>();
+builder.Services.AddCallManagementInfrastructure(connectionString);
+builder.Services.AddConversationInfrastructure(connectionString);
 builder.Services.AddSingleton<RealtimeEventHub>();
 builder.Services.AddHostedService<MqttRealtimeSubscriber>();
 builder.Services.AddHealthChecks().AddCheck<DatabaseHealthCheck>("postgres", tags: ["ready"]);
@@ -52,6 +58,37 @@ bff.MapPut(
     "/locations/{locationId:guid}/display-name",
     async (Guid locationId, UpdateLocationDisplayNameRequest request, TenancyService service, CancellationToken cancellationToken) =>
         Results.Ok(await service.UpdateLocationDisplayNameAsync(locationId, request, cancellationToken)));
+
+bff.MapGet("/calls", async (
+    PrototypeRequestContextAccessor accessor,
+    CallManagementService calls,
+    int? limit,
+    CancellationToken cancellationToken) =>
+{
+    RequestContext context = accessor.Current;
+    return Results.Ok(await calls.GetRecentAsync(
+        context.TenantId,
+        context.LocationId,
+        Math.Clamp(limit ?? 20, 1, 50),
+        cancellationToken));
+});
+
+bff.MapGet("/calls/{callId:guid}", async (
+    Guid callId,
+    PrototypeRequestContextAccessor accessor,
+    CallManagementService calls,
+    ConversationService conversations,
+    CancellationToken cancellationToken) =>
+{
+    RequestContext context = accessor.Current;
+    var call = await calls.GetForLocationAsync(context.TenantId, context.LocationId, callId, cancellationToken);
+
+    return Results.Ok(new
+    {
+        call,
+        conversation = await conversations.GetDetailsForCallAsync(context.TenantId, callId, cancellationToken)
+    });
+});
 
 bff.MapGet("/events", async (
     HttpContext httpContext,
@@ -89,6 +126,8 @@ namespace PurpleGlass.WebBff
             {
                 TenancyResourceNotFoundException => (StatusCodes.Status404NotFound, "Tenant resource not found"),
                 TenancyConcurrencyException => (StatusCodes.Status409Conflict, "The location was changed by another request"),
+                CallApplicationException { Code: "call_not_found" } => (StatusCodes.Status404NotFound, "Call not found"),
+                ConversationApplicationException { Code: "conversation_not_found" } => (StatusCodes.Status404NotFound, "Conversation not found"),
                 ArgumentException => (StatusCodes.Status400BadRequest, "The request is invalid"),
                 _ => (StatusCodes.Status500InternalServerError, "An unexpected error occurred")
             };

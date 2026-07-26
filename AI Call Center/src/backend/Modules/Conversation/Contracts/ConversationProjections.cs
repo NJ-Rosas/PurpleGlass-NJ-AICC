@@ -28,3 +28,13 @@ public sealed record CompletedConversationSummary(
     bool FollowUpRequired,
     bool Escalated,
     DateTimeOffset GeneratedAtUtc);
+
+public sealed record ConversationDetails(
+    Guid ConversationId,
+    Guid CallId,
+    string State,
+    string Language,
+    bool Escalated,
+    string? EscalationReason,
+    IReadOnlyList<LiveTranscriptTurn> Transcript,
+    CompletedConversationSummary? Summary);

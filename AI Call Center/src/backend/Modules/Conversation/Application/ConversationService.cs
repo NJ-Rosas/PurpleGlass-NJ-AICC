@@ -100,6 +100,21 @@ public sealed class ConversationService(IConversationStore store, ICallEligibili
         MapTranscript(await store.GetAsync(tenantId, conversationId, false, cancellationToken) ?? throw ConversationApplicationException.NotFound());
     public async Task<CompletedConversationSummary> GetSummaryAsync(Guid tenantId, Guid conversationId, CancellationToken cancellationToken) =>
         Completed(await store.GetAsync(tenantId, conversationId, false, cancellationToken) ?? throw ConversationApplicationException.NotFound());
+    public async Task<ConversationDetails?> GetDetailsForCallAsync(Guid tenantId, Guid callId, CancellationToken cancellationToken)
+    {
+        ConversationAggregate? conversation = await store.GetForCallAsync(tenantId, callId, false, cancellationToken);
+        return conversation is null
+            ? null
+            : new ConversationDetails(
+                conversation.Id.Value,
+                conversation.CallSession.Value,
+                conversation.State.ToString(),
+                conversation.Language,
+                conversation.Escalated,
+                conversation.EscalationReason,
+                MapTranscript(conversation),
+                conversation.Summary is null ? null : Completed(conversation));
+    }
 
     private async Task<LiveTranscriptTurn> AddTurnAsync(AddConversationTurn command, SpeakerRole speaker, CancellationToken cancellationToken)
     {

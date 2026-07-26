@@ -11,7 +11,13 @@ public sealed record RealtimeEvent(Guid TenantId, string EventType, string Paylo
     public static bool TryCreate(string topic, string payload, out RealtimeEvent? realtimeEvent)
     {
         string[] segments = topic.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        if (segments is ["pg", _, "v1", "tenants", string tenantId, "events", string eventType]
+        bool recognizedShape =
+            segments is ["pg", _, "v1", "tenants", _, "events", _]
+            or ["pg", _, "v1", "tenants", _, "calls", _, "events", _];
+        string? tenantId = recognizedShape ? segments[4] : null;
+        string? eventType = recognizedShape ? segments[^1] : null;
+        if (tenantId is not null
+            && eventType is not null
             && Guid.TryParse(tenantId, out Guid parsedTenantId)
             && !string.IsNullOrWhiteSpace(eventType))
         {
@@ -116,6 +122,7 @@ public sealed partial class MqttRealtimeSubscriber(
                     _ = await client.ConnectAsync(options, stoppingToken);
                     var subscription = new MqttClientSubscribeOptionsBuilder()
                         .WithTopicFilter(configuration["Mqtt:Topic"] ?? "pg/local/v1/tenants/+/events/+")
+                        .WithTopicFilter(configuration["Mqtt:CallTopic"] ?? "pg/local/v1/tenants/+/calls/+/events/+")
                         .Build();
                     _ = await client.SubscribeAsync(subscription, stoppingToken);
                 }

@@ -26,6 +26,29 @@ public sealed class ApplicationServiceTests
     }
 
     [Fact]
+    public async Task DashboardCallLookupRejectsAnotherLocation()
+    {
+        Guid tenantId = Guid.NewGuid();
+        Guid locationId = Guid.NewGuid();
+        var service = new CallManagementService(new MemoryCallStore(), TimeProvider.System);
+        CallSummary call = await service.RegisterInboundAsync(
+            new RegisterInboundCall(
+                tenantId,
+                locationId,
+                "provider-location-scope",
+                "+15550000002",
+                "+15550000001",
+                Guid.NewGuid()),
+            default);
+
+        _ = await service.GetForLocationAsync(tenantId, locationId, call.CallId, default);
+        CallApplicationException error = await Assert.ThrowsAsync<CallApplicationException>(() =>
+            service.GetForLocationAsync(tenantId, Guid.NewGuid(), call.CallId, default));
+
+        Assert.Equal("call_not_found", error.Code);
+    }
+
+    [Fact]
     public async Task ConversationHandlerRejectsIneligibleCall()
     {
         Guid tenant = Guid.NewGuid();
@@ -39,9 +62,55 @@ public sealed class ApplicationServiceTests
         Assert.Equal("call_not_eligible", error.Code);
     }
 
-    private sealed class FixedEligibility(CallEligibility value) : ICallEligibilityQuery
+    [Fact]
+    public async Task DashboardDetailsReturnTenantScopedTranscriptAndSummary()
     {
-        public CallEligibility Value { get; } = value;
+        Guid tenantId = Guid.NewGuid();
+        Guid locationId = Guid.NewGuid();
+        Guid callId = Guid.NewGuid();
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        var conversation = new ConversationAggregate(
+            PurpleGlass.Modules.Conversation.Domain.ConversationId.New(),
+            new PurpleGlass.Modules.Conversation.Domain.CallSessionReference(callId),
+            new PurpleGlass.Modules.Conversation.Domain.TenantId(tenantId),
+            new PurpleGlass.Modules.Conversation.Domain.LocationId(locationId),
+            new PurpleGlass.Modules.Conversation.Domain.CorrelationId(Guid.NewGuid()),
+            "dashboard-v1",
+            "en-US",
+            now);
+        conversation.Activate(now);
+        _ = conversation.AddTurn(
+            PurpleGlass.Modules.Conversation.Domain.ConversationTurnId.New(),
+            PurpleGlass.Modules.Conversation.Domain.SpeakerRole.Caller,
+            "I need to confirm the office hours.",
+            now.AddSeconds(1));
+        conversation.Complete(
+            new PurpleGlass.Modules.Conversation.Domain.ConversationSummary(
+                "The caller confirmed office hours.",
+                "Office hours",
+                "answered",
+                false,
+                false,
+                now.AddSeconds(2),
+                "dashboard-v1"),
+            now.AddSeconds(2));
+
+        var store = new MemoryConversationStore();
+        store.Add(conversation);
+        var service = new ConversationService(store, new FixedEligibility(null), TimeProvider.System);
+
+        ConversationDetails? result = await service.GetDetailsForCallAsync(tenantId, callId, default);
+        ConversationDetails? otherTenantResult = await service.GetDetailsForCallAsync(Guid.NewGuid(), callId, default);
+
+        ConversationDetails details = Assert.IsType<ConversationDetails>(result);
+        Assert.Single(details.Transcript);
+        Assert.Equal("The caller confirmed office hours.", details.Summary?.Summary);
+        Assert.Null(otherTenantResult);
+    }
+
+    private sealed class FixedEligibility(CallEligibility? value) : ICallEligibilityQuery
+    {
+        public CallEligibility Value { get; } = value ?? new CallEligibility(Guid.Empty, Guid.Empty, Guid.Empty, "Unavailable", false);
         public Task<CallEligibility?> GetEligibilityAsync(Guid tenantId, Guid callId, CancellationToken cancellationToken) => Task.FromResult<CallEligibility?>(Value);
     }
 
