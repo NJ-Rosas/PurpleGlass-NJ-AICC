@@ -50,17 +50,40 @@ Free Web Services do not support Render's paid pre-deploy command. The single BF
 
 Render uses BFF `/health/live` as its deployment health gate. This endpoint is process/container liveness: it confirms ASP.NET started, the HTTP server is responding, and the process is alive without making temporary external dependency failures restart a functioning service. BFF `/health/ready` remains the independent operational-readiness endpoint; it verifies PostgreSQL connectivity and telephony-provider readiness and should be checked after deployment before an experiment. The worker wrapper's `/health/live` confirms its container is awake; inspect sanitized worker logs to confirm MQTT connectivity and outbox progress.
 
-## Provider enablement later
+## Enable Twilio for a cloud-development call
 
-Initial provisioning does not request unused Twilio/OpenAI inputs. When explicitly enabling providers, add the existing configuration names in the Render Dashboard—never in Git:
+The Blueprint remains safe by default: do not change the disabled provider values in `render.yaml`. Enable Twilio with manual Render environment overrides only for the development experiment. OpenAI is not part of this path.
 
-- `Telephony__PublicBaseUrl`
-- `Telephony__Twilio__AccountSid`
-- `Telephony__Twilio__AuthToken`
-- `OpenAI__ApiKey`
-- provider selectors and `Providers__EnableRealTelephony`, `Providers__EnableRealAI`, and `Providers__EnableRealSpeech`
+In the Render Dashboard, set these values on **both** `purpleglass-web` and `purpleglass-integrations-worker`:
 
-Set `Telephony__PublicBaseUrl` to the exact public HTTPS BFF origin. PurpleGlass reconstructs Twilio signature URLs from this canonical configuration rather than arbitrary Host/forwarded headers and derives `wss://<host>/telephony/twilio/media` from it. Configure the Twilio voice webhook as `POST https://<host>/telephony/twilio/inbound`. Signature verification remains mandatory.
+- `Providers__EnableRealTelephony=true`
+- `Telephony__Provider=Twilio`
+- `Telephony__PublicBaseUrl=https://purpleglass-web.onrender.com`
+- `Telephony__Twilio__AccountSid=<Twilio Account SID>`
+- `Telephony__Twilio__AuthToken=<Twilio Auth Token>`
+
+Keep `Providers__EnableRealAI=false` and `Providers__EnableRealSpeech=false`. Store the SID and Auth Token only as Render secrets; never place them in the Blueprint, source control, logs, screenshots, or support output. Both services consume the Twilio credentials: the worker submits and updates calls, while the Web BFF verifies signed HTTP and WebSocket callbacks and validates the media Account SID.
+
+There is deliberately no `Telephony__Twilio__FromNumber` setting. PurpleGlass takes the outbound caller ID from its persisted telephony-number assignment for the administrator's tenant and location. Before calling, use the authenticated `PUT /bff/v1/telephony/numbers` administration endpoint to assign the Twilio number in E.164 format with `provider` set to `Twilio`, the selected `locationId`, `outboundEnabled: true`, and `active: true`. Set `inboundEnabled: true` only if inbound routing will also be tested. The request is CSRF-protected and requires the `ManageLocation` permission; do not create the row manually in PostgreSQL.
+
+Twilio trial calls may target only a recipient verified in the Twilio Console. Enter that verified destination in the PurpleGlass call control in E.164 form, for example `+15551234567`; never hard-code it. The configured source number must be a Twilio number the trial account is allowed to use.
+
+PurpleGlass uses these exact provider routes:
+
+- Outbound answer/TwiML: `POST https://purpleglass-web.onrender.com/telephony/twilio/answer?operationId=<operation-id>` (generated per durable operation; do not configure this manually in Twilio)
+- Status callback: `POST https://purpleglass-web.onrender.com/telephony/twilio/status?operationId=<operation-id>` (generated per durable operation)
+- Inbound voice webhook: `POST https://purpleglass-web.onrender.com/telephony/twilio/inbound`
+- Realtime media: `wss://purpleglass-web.onrender.com/telephony/twilio/media` (returned in TwiML)
+
+Set the Twilio number's incoming Voice webhook to the inbound URL only when inbound calling is required. PurpleGlass reconstructs signature inputs from the canonical public base URL rather than Render's internal HTTP representation. `X-Twilio-Signature` verification is mandatory for all three webhooks and the media WebSocket.
+
+Before the first outbound test, deploy both services after saving their environment changes. Wake `purpleglass-web` and `purpleglass-integrations-worker` by opening their `/health/live` endpoints, wait for `https://purpleglass-web.onrender.com/health/ready` to return 200, and confirm the worker remains awake. Then sign in as the development administrator and call only the verified trial recipient. Do not use an automated test to place the call.
+
+Watch the PurpleGlass call state/dashboard and SSE updates, the Twilio Call log, and sanitized Render logs. Safe failure categories include `telephony_number_unavailable`, `provider_rejected`, `provider_authentication_failed`, `provider_network_error`, `provider_timeout`, `provider_unavailable`, `invalid_provider_signature`, `public_base_url_invalid`, and `provider_disabled`. Twilio's Call log is the appropriate place to distinguish trial-recipient verification errors from other provider rejections. Never copy the Auth Token, authorization headers, signatures, phone numbers, audio, transcripts, or patient information into logs or reports.
+
+To disable Twilio again on both Render services, restore `Providers__EnableRealTelephony=false` and `Telephony__Provider=None`, redeploy, and verify `/health/ready`. Remove the three Twilio-specific values from each service when the experiment is over. Leave the AI and speech toggles false throughout.
+
+Initial provisioning does not request unused Twilio/OpenAI inputs. If OpenAI is enabled in a separate future task, store `OpenAI__ApiKey` only as a Render secret and use the existing provider selectors and safety switches.
 
 `Security__ProductionOrigin` and production OIDC settings are not required while this synthetic cloud environment intentionally runs in `Development`. They become mandatory before moving to `Production`; that upgrade also requires persistent Data Protection keys and the existing server-owned identity mappings.
 
