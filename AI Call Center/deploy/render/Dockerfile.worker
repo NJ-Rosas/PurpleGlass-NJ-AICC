@@ -3,7 +3,11 @@ WORKDIR /src
 COPY . .
 RUN dotnet publish src/backend/Hosts/PurpleGlass.Integrations.Worker/PurpleGlass.Integrations.Worker.csproj -c Release -o /out --no-self-contained
 
-FROM mcr.microsoft.com/dotnet/runtime:10.0-alpine
+FROM mcr.microsoft.com/dotnet/aspnet:10.0-alpine
 WORKDIR /app
+RUN apk add --no-cache busybox-extras krb5-libs
 COPY --from=build /out ./
-ENTRYPOINT ["dotnet", "PurpleGlass.Integrations.Worker.dll"]
+COPY deploy/render/start-free-worker.sh ./start-free-worker.sh
+RUN mkdir -p /health/health && printf 'Healthy\n' > /health/health/live
+EXPOSE 10000
+ENTRYPOINT ["/bin/sh", "./start-free-worker.sh"]

@@ -16,5 +16,6 @@ FROM mcr.microsoft.com/dotnet/aspnet:10.0-alpine
 WORKDIR /app
 COPY --from=backend /out ./
 COPY --from=backend /migrations ./migrations/
+COPY deploy/render/start-free-web.sh ./start-free-web.sh
 EXPOSE 10000
-ENTRYPOINT ["dotnet", "PurpleGlass.WebBff.dll"]
+ENTRYPOINT ["/bin/sh", "./start-free-web.sh"]

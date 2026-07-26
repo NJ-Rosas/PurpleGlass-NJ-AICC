@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Text;
 using System.Threading.Channels;
 using MQTTnet;
+using PurpleGlass.Eventing.Infrastructure;
 using PurpleGlass.Observability;
 using System.Diagnostics;
 
@@ -132,11 +133,16 @@ public sealed partial class MqttRealtimeSubscriber(
             return Task.CompletedTask;
         };
 
-        var options = new MqttClientOptionsBuilder()
+        MqttConnectionSettings settings = MqttConnectionSettings.From(configuration);
+        var optionsBuilder = new MqttClientOptionsBuilder()
             .WithClientId($"purpleglass-bff-{Environment.ProcessId}")
-            .WithTcpServer(configuration["Mqtt:Host"] ?? "localhost", configuration.GetValue("Mqtt:Port", 1883))
-            .WithCleanSession()
-            .Build();
+            .WithTcpServer(settings.Host, settings.Port)
+            .WithCleanSession();
+        if (!string.IsNullOrWhiteSpace(settings.Username))
+            optionsBuilder.WithCredentials(settings.Username, settings.Password!);
+        if (settings.UseTls)
+            optionsBuilder.WithTlsOptions(tls => tls.UseTls(true));
+        var options = optionsBuilder.Build();
 
         while (!stoppingToken.IsCancellationRequested)
         {

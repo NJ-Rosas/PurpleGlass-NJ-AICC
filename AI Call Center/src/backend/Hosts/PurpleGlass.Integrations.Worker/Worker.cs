@@ -20,15 +20,18 @@ public sealed partial class Worker(
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        string host = configuration["Mqtt:Host"] ?? "localhost";
-        int port = configuration.GetValue("Mqtt:Port", 1883);
+        MqttConnectionSettings mqttSettings = MqttConnectionSettings.From(configuration);
         var factory = new MqttClientFactory();
         using IMqttClient client = factory.CreateMqttClient();
-        var options = new MqttClientOptionsBuilder()
+        var optionsBuilder = new MqttClientOptionsBuilder()
             .WithClientId($"purpleglass-outbox-{Environment.MachineName}-{Environment.ProcessId}")
-            .WithTcpServer(host, port)
-            .WithCleanSession()
-            .Build();
+            .WithTcpServer(mqttSettings.Host, mqttSettings.Port)
+            .WithCleanSession();
+        if (!string.IsNullOrWhiteSpace(mqttSettings.Username))
+            optionsBuilder.WithCredentials(mqttSettings.Username, mqttSettings.Password!);
+        if (mqttSettings.UseTls)
+            optionsBuilder.WithTlsOptions(tls => tls.UseTls(true));
+        var options = optionsBuilder.Build();
 
         while (!stoppingToken.IsCancellationRequested)
         {
