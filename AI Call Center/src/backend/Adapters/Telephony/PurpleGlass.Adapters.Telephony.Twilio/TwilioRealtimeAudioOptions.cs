@@ -2,6 +2,8 @@ namespace PurpleGlass.Adapters.Telephony.Twilio;
 
 public sealed class TwilioRealtimeAudioOptions
 {
+    public const string SectionName = "TwilioRealtimeAudio";
+
     public TimeSpan StartTimeout { get; init; } = TimeSpan.FromSeconds(5);
 
     public TimeSpan CloseTimeout { get; init; } = TimeSpan.FromSeconds(2);
@@ -21,6 +23,10 @@ public sealed class TwilioRealtimeAudioOptions
     public TimeSpan OutboundPacketDuration { get; init; } = TimeSpan.FromMilliseconds(100);
 
     public bool EnableOutboundPacing { get; init; } = true;
+
+    public int OutboundPacketBytes => checked((int)Math.Round(
+        TwilioRealtimeAudioProtocol.TelephonySampleRate * OutboundPacketDuration.TotalSeconds,
+        MidpointRounding.AwayFromZero));
 
     public TwilioRealtimeAudioOptions Validate()
     {
@@ -43,9 +49,7 @@ public sealed class TwilioRealtimeAudioOptions
         if (OutboundPacketDuration < TimeSpan.FromMilliseconds(20)
             || OutboundPacketDuration > TimeSpan.FromMilliseconds(250))
             throw new InvalidOperationException("Twilio outbound packet duration must be between 20 and 250 milliseconds.");
-        int pacedMediaBytes = checked((int)Math.Round(
-            TwilioRealtimeAudioProtocol.TelephonySampleRate * OutboundPacketDuration.TotalSeconds,
-            MidpointRounding.AwayFromZero));
+        int pacedMediaBytes = OutboundPacketBytes;
         if (pacedMediaBytes < 80 || pacedMediaBytes > MaxOutboundMediaBytes)
             throw new InvalidOperationException("Twilio paced media must fit the outbound media bound.");
 

@@ -158,7 +158,8 @@ public sealed partial class BffVoiceSessionDiagnostics(ILogger<BffVoiceSessionDi
     public void RecordPlaybackEvent(VoicePlaybackEventDiagnostic diagnostic) =>
         LogPlaybackEvent(logger, diagnostic.CallId, diagnostic.CorrelationId,
             diagnostic.ResponseId, diagnostic.Event, diagnostic.MediaMessagesSent,
-            diagnostic.BufferedAudioDurationMs, diagnostic.SafeReason);
+            diagnostic.BufferedAudioDurationMs, diagnostic.SafeReason, diagnostic.ElapsedMs,
+            diagnostic.ElapsedFromFirstMediaMs, diagnostic.ElapsedFromMarkSentMs);
 
     [LoggerMessage(204, LogLevel.Error,
         "Realtime voice session exception; CallId={CallId}, ConversationId={ConversationId}, TenantId={TenantId}, LocationId={LocationId}, Provider={Provider}, ProviderCallId={ProviderCallId}, CorrelationId={CorrelationId}, Stage={Stage}, SafeCode={SafeCode}, ExceptionType={ExceptionType}, RootExceptionType={RootExceptionType}.")]
@@ -180,10 +181,11 @@ public sealed partial class BffVoiceSessionDiagnostics(ILogger<BffVoiceSessionDi
         int muLawBytes, int mediaMessageCount, bool markSent, bool cleared, bool canceled);
 
     [LoggerMessage(207, LogLevel.Information,
-        "Realtime playback event; CallId={CallId}, CorrelationId={CorrelationId}, ResponseId={ResponseId}, Event={Event}, MediaMessagesSent={MediaMessagesSent}, BufferedAudioDurationMs={BufferedAudioDurationMs}, SafeReason={SafeReason}.")]
+        "Realtime playback event; CallId={CallId}, CorrelationId={CorrelationId}, ResponseId={ResponseId}, Event={Event}, MediaMessagesSent={MediaMessagesSent}, BufferedAudioDurationMs={BufferedAudioDurationMs}, SafeReason={SafeReason}, ElapsedMs={ElapsedMs}, ElapsedFromFirstMediaMs={ElapsedFromFirstMediaMs}, ElapsedFromMarkSentMs={ElapsedFromMarkSentMs}.")]
     private static partial void LogPlaybackEvent(ILogger logger, Guid callId, Guid correlationId,
         string responseId, string @event, int mediaMessagesSent,
-        double bufferedAudioDurationMs, string safeReason);
+        double bufferedAudioDurationMs, string safeReason, double elapsedMs,
+        double elapsedFromFirstMediaMs, double elapsedFromMarkSentMs);
 }
 
 public sealed class VoiceSessionConflictException(string code) : Exception("A voice session is already active for this call.")

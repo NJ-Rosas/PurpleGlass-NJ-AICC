@@ -30,6 +30,7 @@ public sealed class RealtimeVoiceSession(
     private string? activeResponseId;
     private long responseGeneration;
     private long activeResponseGeneration;
+    private long activeResponseStartedTimestamp;
     private bool activeResponseCleared;
     private bool stopRequested;
     private int started;
@@ -337,12 +338,14 @@ public sealed class RealtimeVoiceSession(
         CancellationTokenSource? operation = null;
         bool interrupted;
         string responseId;
+        long responseStartedTimestamp;
         lock (synchronization)
         {
             operation = activeOperation;
             interrupted = operation is not null;
             if (interrupted && activeResponseId is not null) activeResponseCleared = true;
             responseId = activeResponseId ?? "none";
+            responseStartedTimestamp = activeResponseStartedTimestamp;
             if (interrupted) activeResponseGeneration = 0;
         }
 
@@ -350,15 +353,24 @@ public sealed class RealtimeVoiceSession(
         {
             diagnostics.RecordPlaybackEvent(new VoicePlaybackEventDiagnostic(
                 identity!.CallId, identity.CorrelationId, responseId,
-                "barge_in_confirmed", 0, 0, "confirmed_speech"));
+                "barge_in_requested", 0, 0, "confirmed_speech",
+                ElapsedMs: responseStartedTimestamp == 0 ? 0
+                    : timeProvider.GetElapsedTime(responseStartedTimestamp).TotalMilliseconds));
             try { operation?.Cancel(); }
             catch (ObjectDisposedException) { }
             try
             {
+                diagnostics.RecordPlaybackEvent(new VoicePlaybackEventDiagnostic(
+                    identity.CallId, identity.CorrelationId, responseId,
+                    "twilio_clear_send_started", 0, 0, "confirmed_speech",
+                    ElapsedMs: responseStartedTimestamp == 0 ? 0
+                        : timeProvider.GetElapsedTime(responseStartedTimestamp).TotalMilliseconds));
                 await transport!.ClearPlaybackAsync(cancellationToken);
                 diagnostics.RecordPlaybackEvent(new VoicePlaybackEventDiagnostic(
                     identity.CallId, identity.CorrelationId, responseId,
-                    "twilio_clear_sent", 0, 0, "confirmed_speech"));
+                    "twilio_clear_send_completed", 0, 0, "confirmed_speech",
+                    ElapsedMs: responseStartedTimestamp == 0 ? 0
+                        : timeProvider.GetElapsedTime(responseStartedTimestamp).TotalMilliseconds));
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
             catch (Exception) { }
@@ -535,6 +547,7 @@ public sealed class RealtimeVoiceSession(
     {
         CancellationTokenSource? ownedOperation = null;
         long generation = 0;
+        long responseStarted = 0;
         string diagnosticResponseId = Guid.NewGuid().ToString("N");
         if (existingOperation is null)
         {
@@ -544,16 +557,21 @@ public sealed class RealtimeVoiceSession(
         try
         {
             generation = Interlocked.Increment(ref responseGeneration);
+            responseStarted = timeProvider.GetTimestamp();
             lock (synchronization)
             {
                 activeResponseId = diagnosticResponseId;
                 activeResponseGeneration = generation;
+                activeResponseStartedTimestamp = responseStarted;
                 activeResponseCleared = false;
             }
             diagnostics.RecordPlaybackEvent(new VoicePlaybackEventDiagnostic(
                 identity!.CallId, identity.CorrelationId, diagnosticResponseId,
                 "playback_preparing", 0, 0, "new_response"));
             await PublishStateAsync(VoiceSessionState.Speaking, null, existingOperation.Token);
+            diagnostics.RecordPlaybackEvent(new VoicePlaybackEventDiagnostic(
+                identity.CallId, identity.CorrelationId, diagnosticResponseId,
+                "tts_started", 0, 0, "response_created"));
             using Activity? synthActivity = PurpleGlassTelemetry.Calls.StartActivity("speech.synthesize", ActivityKind.Client);
             PurpleGlassTelemetry.SpeechSynthesisRequests.Add(1);
             long synthesisStarted = timeProvider.GetTimestamp();
@@ -566,6 +584,10 @@ public sealed class RealtimeVoiceSession(
             PurpleGlassTelemetry.SpeechSynthesisDuration.Record(
                 timeProvider.GetElapsedTime(synthesisStarted).TotalMilliseconds,
                 new KeyValuePair<string, object?>("adapter", speechSynthesizer.AdapterKey));
+            diagnostics.RecordPlaybackEvent(new VoicePlaybackEventDiagnostic(
+                identity.CallId, identity.CorrelationId, diagnosticResponseId,
+                "tts_completed", 0, 0, "provider_completed",
+                ElapsedMs: timeProvider.GetElapsedTime(responseStarted).TotalMilliseconds));
             IReadOnlyList<SynthesizedAudioChunk> chunks = synthesis.AudioChunks ?? [];
             if (chunks.Count == 0)
                 throw new VoicePipelineException("speech_synthesis_invalid", "The speech provider returned no audio.");
@@ -603,7 +625,23 @@ public sealed class RealtimeVoiceSession(
             diagnostics.RecordPlaybackEvent(new VoicePlaybackEventDiagnostic(
                 identity.CallId, identity.CorrelationId, sendResult.ResponseId,
                 "playback_mark_sent", sendResult.MediaMessageCount,
-                sendResult.MaximumBufferedAudioDurationMs, "response_complete"));
+                sendResult.MaximumBufferedAudioDurationMs, "local_media_complete",
+                ElapsedMs: timeProvider.GetElapsedTime(responseStarted).TotalMilliseconds));
+            lock (synchronization)
+            {
+                if (activeResponseGeneration == generation)
+                    activeResponseId = sendResult.ResponseId;
+            }
+            RealtimePlaybackCompletion playback = await transport!.WaitForPlaybackCompletionAsync(
+                sendResult.ResponseId, existingOperation.Token);
+            diagnostics.RecordPlaybackEvent(new VoicePlaybackEventDiagnostic(
+                identity.CallId, identity.CorrelationId, playback.ResponseId,
+                playback.MarkAcknowledged ? "playback_mark_acknowledged" : "playback_cleared",
+                sendResult.MediaMessageCount, sendResult.MaximumBufferedAudioDurationMs,
+                playback.MarkAcknowledged ? "provider_playback_complete" : "barge_in",
+                ElapsedMs: timeProvider.GetElapsedTime(responseStarted).TotalMilliseconds,
+                ElapsedFromFirstMediaMs: playback.ElapsedFromFirstMediaMs,
+                ElapsedFromMarkSentMs: playback.ElapsedFromMarkSentMs));
         }
         catch (OperationCanceledException)
         {
@@ -631,6 +669,7 @@ public sealed class RealtimeVoiceSession(
                     || string.Equals(activeResponseId, diagnosticResponseId, StringComparison.Ordinal))
                 {
                     activeResponseGeneration = 0;
+                    activeResponseStartedTimestamp = 0;
                     activeResponseId = null;
                     activeResponseCleared = false;
                 }

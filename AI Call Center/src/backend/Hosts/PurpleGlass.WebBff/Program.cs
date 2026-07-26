@@ -30,6 +30,7 @@ using System.Security;
 using PurpleGlass.Adapters.Telephony.Fake;
 using PurpleGlass.Adapters.Telephony.Twilio;
 using PurpleGlass.Modules.CallManagement.Contracts;
+using System.Reflection;
 
 var builder = WebApplication.CreateBuilder(args);
 if (int.TryParse(builder.Configuration["PORT"], out int renderPort) && renderPort is > 0 and <= 65535)
@@ -182,6 +183,20 @@ builder.Services.AddExceptionHandler<SecurityExceptionHandler>();
 builder.Services.AddProblemDetails();
 
 var app = builder.Build();
+TwilioRealtimeAudioOptions startupTransportOptions = app.Services.GetRequiredService<TwilioRealtimeAudioOptions>();
+string applicationVersion = Assembly.GetExecutingAssembly()
+    .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
+    ?? Assembly.GetExecutingAssembly().GetName().Version?.ToString()
+    ?? "unknown";
+Action<ILogger, string, double, int, int, bool, string, Exception?> logVoiceTransportConfigured =
+    LoggerMessage.Define<string, double, int, int, bool, string>(
+        LogLevel.Information,
+        new EventId(208, "RealtimeVoiceTransportConfigured"),
+        "Realtime voice transport configured; ApplicationVersion={ApplicationVersion}, OutboundPacketDurationMs={OutboundPacketDurationMs}, OutboundPacketBytes={OutboundPacketBytes}, MaxOutboundMediaBytes={MaxOutboundMediaBytes}, PacingEnabled={PacingEnabled}, PacingMode={PacingMode}.");
+logVoiceTransportConfigured(
+    app.Logger, applicationVersion, startupTransportOptions.OutboundPacketDuration.TotalMilliseconds,
+    startupTransportOptions.OutboundPacketBytes, startupTransportOptions.MaxOutboundMediaBytes,
+    startupTransportOptions.EnableOutboundPacing, "monotonic_bounded_send_ahead", null);
 if (!app.Environment.IsDevelopment()) { app.UseHsts(); app.UseHttpsRedirection(); }
 app.UseExceptionHandler();
 app.UseMiddleware<SecurityHeadersMiddleware>();

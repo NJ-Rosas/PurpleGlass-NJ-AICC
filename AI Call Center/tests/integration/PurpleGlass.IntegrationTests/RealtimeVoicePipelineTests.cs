@@ -195,6 +195,44 @@ public sealed class RealtimeVoicePipelineTests(DurablePathFixture fixture)
     }
 
     [Fact]
+    public async Task SpeechAfterAllMediaSentButBeforeMarkAcknowledgementStillClearsPlayback()
+    {
+        var recognizer = new ControlledSpeechRecognizer(response: (_, invocation) =>
+            invocation == 1 ? "First question" : "Interrupting question");
+        await using SessionHarness harness = await CreateHarnessAsync(recognizer: recognizer);
+        Task run = harness.Start();
+        _ = await harness.States.WaitForAsync(change => change.State == VoiceSessionState.Listening);
+
+        harness.Transport.AutoAcknowledgePlayback = false;
+        await harness.Transport.QueueUtteranceAsync("First question");
+        await harness.Synthesizer.WaitForInvocationsAsync(2);
+        using (var timeout = new CancellationTokenSource(TestTimeout))
+        {
+            while (harness.Transport.OutboundChunks.Count < 2)
+                await Task.Delay(10, timeout.Token);
+        }
+
+        harness.Transport.AutoAcknowledgePlayback = true;
+        await harness.Transport.QueueUtteranceAsync("Interrupting question");
+        using (var timeout = new CancellationTokenSource(TestTimeout))
+        {
+            while (harness.Transport.ClearPlaybackCount == 0)
+                await Task.Delay(10, timeout.Token);
+        }
+        await harness.Synthesizer.WaitForInvocationsAsync(3);
+        _ = await harness.States.WaitForOccurrencesAsync(VoiceSessionState.Listening, 2);
+        harness.Transport.CompleteInput();
+        await run.WaitAsync(TestTimeout);
+
+        Assert.Equal(1, harness.Transport.ClearPlaybackCount);
+        Assert.Equal(2, recognizer.Requests.Count);
+        Assert.Equal(2, harness.LanguageModel.Requests.Count);
+        Assert.DoesNotContain(harness.States.Changes,
+            change => change.State == VoiceSessionState.Failed);
+        await AssertCompletedAndDisposedAsync(harness, "media_disconnected");
+    }
+
+    [Fact]
     public async Task CallerBargeInDuringCallerTurnCommitDoesNotPoisonTheNextTurn()
     {
         var interceptor = new BlockingCallerTurnCommandInterceptor();

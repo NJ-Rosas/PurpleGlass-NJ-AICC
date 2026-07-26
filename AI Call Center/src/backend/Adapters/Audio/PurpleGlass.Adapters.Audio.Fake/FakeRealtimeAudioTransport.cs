@@ -12,6 +12,8 @@ public sealed class FakeRealtimeAudioTransport : IRealtimeAudioTransport
     private readonly List<SynthesizedAudioChunk> outbound = [];
     private readonly object synchronization = new();
     private long nextSequence;
+    private long responseSequence;
+    private readonly Dictionary<string, TaskCompletionSource<RealtimePlaybackCompletion>> pendingPlayback = [];
     private bool disposed;
 
     public FakeRealtimeAudioTransport(
@@ -40,6 +42,7 @@ public sealed class FakeRealtimeAudioTransport : IRealtimeAudioTransport
     public AudioFormat InputFormat => AudioFormat.SyntheticText;
     public int ClearPlaybackCount { get; private set; }
     public string? CompletionReason { get; private set; }
+    public bool AutoAcknowledgePlayback { get; set; } = true;
 
     public IReadOnlyList<SynthesizedAudioChunk> OutboundChunks
     {
@@ -82,17 +85,44 @@ public sealed class FakeRealtimeAudioTransport : IRealtimeAudioTransport
             if (outbound.Count == MaximumCapturedOutputChunks) outbound.RemoveAt(0);
             outbound.Add(chunk);
         }
-        return ValueTask.FromResult(chunk.IsFinal
-            ? new RealtimeAudioSendResult(
-                $"fake-response-{chunk.Sequence}", chunk.Audio.Length,
-                chunk.Audio.Length, chunk.Audio.Length, chunk.Audio.Length, 1, true, 0)
-            : RealtimeAudioSendResult.Pending);
+        if (!chunk.IsFinal) return ValueTask.FromResult(RealtimeAudioSendResult.Pending);
+        string responseId = $"fake-response-{Interlocked.Increment(ref responseSequence)}";
+        lock (synchronization)
+        {
+            var completion = new TaskCompletionSource<RealtimePlaybackCompletion>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            pendingPlayback[responseId] = completion;
+            if (AutoAcknowledgePlayback)
+                completion.TrySetResult(new(responseId, true, false, 0, 0));
+        }
+        return ValueTask.FromResult(new RealtimeAudioSendResult(
+            responseId, chunk.Audio.Length, chunk.Audio.Length,
+            chunk.Audio.Length, chunk.Audio.Length, 1, true, 0));
+    }
+
+    public async ValueTask<RealtimePlaybackCompletion> WaitForPlaybackCompletionAsync(
+        string responseId,
+        CancellationToken cancellationToken)
+    {
+        Task<RealtimePlaybackCompletion> completion;
+        lock (synchronization)
+            completion = pendingPlayback[responseId].Task;
+        try { return await completion.WaitAsync(cancellationToken); }
+        finally
+        {
+            lock (synchronization) pendingPlayback.Remove(responseId);
+        }
     }
 
     public ValueTask ClearPlaybackAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ClearPlaybackCount++;
+        lock (synchronization)
+        {
+            foreach ((string responseId, TaskCompletionSource<RealtimePlaybackCompletion> completion) in pendingPlayback)
+                completion.TrySetResult(new(responseId, false, true, 0, 0));
+        }
         return ValueTask.CompletedTask;
     }
 

@@ -44,7 +44,10 @@ public static class RealtimeVoiceServiceCollectionExtensions
         services.AddSingleton<IRealtimeConversationPersistence, ScopedRealtimeConversationPersistence>();
         services.AddScoped<RealtimeVoiceSession>();
         services.AddSingleton<VoiceSessionManager>();
-        services.AddSingleton(new TwilioRealtimeAudioOptions().Validate());
+        TwilioRealtimeAudioOptions transportOptions = configuration
+            .GetSection(TwilioRealtimeAudioOptions.SectionName)
+            .Get<TwilioRealtimeAudioOptions>() ?? new TwilioRealtimeAudioOptions();
+        services.AddSingleton(transportOptions.Validate());
         services.AddSingleton<TwilioRealtimeAudioTransportFactory>();
 
         services.AddSingleton(new MockAiOptions());

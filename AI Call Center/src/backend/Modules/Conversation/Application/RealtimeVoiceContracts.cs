@@ -40,10 +40,21 @@ public interface IRealtimeAudioTransport : IAsyncDisposable
 
     ValueTask<RealtimeAudioSendResult> SendAsync(SynthesizedAudioChunk chunk, CancellationToken cancellationToken);
 
+    ValueTask<RealtimePlaybackCompletion> WaitForPlaybackCompletionAsync(
+        string responseId,
+        CancellationToken cancellationToken);
+
     ValueTask ClearPlaybackAsync(CancellationToken cancellationToken);
 
     ValueTask CompleteAsync(string reason, CancellationToken cancellationToken);
 }
+
+public sealed record RealtimePlaybackCompletion(
+    string ResponseId,
+    bool MarkAcknowledged,
+    bool Cleared,
+    double ElapsedFromFirstMediaMs,
+    double ElapsedFromMarkSentMs);
 
 public sealed record RealtimeAudioSendResult(
     string ResponseId,

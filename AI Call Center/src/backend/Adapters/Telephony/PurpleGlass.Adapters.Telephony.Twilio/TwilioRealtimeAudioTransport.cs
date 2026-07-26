@@ -3,7 +3,6 @@ using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Diagnostics;
-using System.Collections.Concurrent;
 using PurpleGlass.Modules.Conversation.Application;
 
 namespace PurpleGlass.Adapters.Telephony.Twilio;
@@ -14,7 +13,9 @@ public sealed class TwilioRealtimeAudioTransport : IRealtimeAudioTransport
     private readonly TwilioRealtimeAudioOptions options;
     private readonly TimeProvider timeProvider;
     private readonly SemaphoreSlim writeLock = new(1, 1);
-    private readonly ConcurrentDictionary<string, byte> pendingMarks = new(StringComparer.Ordinal);
+    private readonly SemaphoreSlim sendGate = new(1, 1);
+    private readonly object playbackSynchronization = new();
+    private readonly Dictionary<string, PendingPlayback> pendingMarks = new(StringComparer.Ordinal);
     private MemoryStream? pendingPcm;
     private AudioFormat? pendingFormat;
     private long nextChunkSequence = 1;
@@ -69,7 +70,7 @@ public sealed class TwilioRealtimeAudioTransport : IRealtimeAudioTransport
         ThrowIfUnavailable();
         ValidatePcmChunk(chunk);
 
-        await writeLock.WaitAsync(cancellationToken);
+        await sendGate.WaitAsync(cancellationToken);
         byte[] pcm = [];
         byte[] encoded = [];
         int mediaMessageCount = 0;
@@ -99,23 +100,29 @@ public sealed class TwilioRealtimeAudioTransport : IRealtimeAudioTransport
             }
             encoded = TwilioMuLawCodec.EncodePcm16(pcm);
 
-            int pacedMediaBytes = Math.Min(options.MaxOutboundMediaBytes, checked((int)Math.Round(
-                TwilioRealtimeAudioProtocol.TelephonySampleRate * options.OutboundPacketDuration.TotalSeconds,
-                MidpointRounding.AwayFromZero)));
+            int pacedMediaBytes = options.OutboundPacketBytes;
+            long pacingStarted = timeProvider.GetTimestamp();
+            long firstMediaSent = 0;
             for (int offset = 0; offset < encoded.Length; offset += pacedMediaBytes)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 int length = Math.Min(pacedMediaBytes, encoded.Length - offset);
                 string payload = Convert.ToBase64String(encoded, offset, length);
-                await SendWireMessageLockedAsync(new
+                await SendWireMessageAsync(new
                 {
                     @event = "media",
                     streamSid = ProviderMediaStreamId,
                     media = new { payload },
                 }, cancellationToken);
                 mediaMessageCount++;
-                if (options.EnableOutboundPacing)
-                    await Task.Delay(options.OutboundPacketDuration, timeProvider, cancellationToken);
+                if (firstMediaSent == 0) firstMediaSent = timeProvider.GetTimestamp();
+                if (options.EnableOutboundPacing && offset + length < encoded.Length)
+                {
+                    TimeSpan targetElapsed = options.OutboundPacketDuration * mediaMessageCount;
+                    TimeSpan remaining = targetElapsed - timeProvider.GetElapsedTime(pacingStarted);
+                    if (remaining > TimeSpan.Zero)
+                        await Task.Delay(remaining, timeProvider, cancellationToken);
+                }
             }
 
             if (mediaMessageCount == 0 || encoded.Length == 0)
@@ -123,13 +130,23 @@ public sealed class TwilioRealtimeAudioTransport : IRealtimeAudioTransport
                     "provider_media_output_empty", "PCM audio produced no provider media.");
 
             string name = $"response-{Interlocked.Increment(ref markSequence)}";
-            await SendWireMessageLockedAsync(new
+            long markSent = timeProvider.GetTimestamp();
+            var pending = new PendingPlayback(firstMediaSent, markSent);
+            lock (playbackSynchronization) pendingMarks.Add(name, pending);
+            try
             {
-                @event = "mark",
-                streamSid = ProviderMediaStreamId,
-                mark = new { name },
-            }, cancellationToken);
-            _ = pendingMarks.TryAdd(name, 0);
+                await SendWireMessageAsync(new
+                {
+                    @event = "mark",
+                    streamSid = ProviderMediaStreamId,
+                    mark = new { name },
+                }, cancellationToken);
+            }
+            catch
+            {
+                lock (playbackSynchronization) pendingMarks.Remove(name);
+                throw;
+            }
             Activity.Current?.SetTag("voice.source_pcm_bytes", sourcePcmBytes);
             Activity.Current?.SetTag("voice.source_samples", sourcePcmBytes / sizeof(short));
             Activity.Current?.SetTag("voice.resampled_samples", pcm.Length / sizeof(short));
@@ -159,33 +176,57 @@ public sealed class TwilioRealtimeAudioTransport : IRealtimeAudioTransport
         }
         finally
         {
-            writeLock.Release();
+            sendGate.Release();
             CryptographicOperations.ZeroMemory(pcm);
             CryptographicOperations.ZeroMemory(encoded);
+        }
+    }
+
+    public async ValueTask<RealtimePlaybackCompletion> WaitForPlaybackCompletionAsync(
+        string responseId,
+        CancellationToken cancellationToken)
+    {
+        PendingPlayback pending;
+        lock (playbackSynchronization)
+        {
+            if (!pendingMarks.TryGetValue(responseId, out pending!))
+                throw new TwilioRealtimeAudioException(
+                    "provider_playback_unknown", "Provider playback state was unavailable.");
+        }
+        try { return await pending.Completion.Task.WaitAsync(cancellationToken); }
+        finally
+        {
+            lock (playbackSynchronization)
+            {
+                if (pendingMarks.TryGetValue(responseId, out PendingPlayback? current)
+                    && ReferenceEquals(current, pending))
+                    pendingMarks.Remove(responseId);
+            }
         }
     }
 
     public async ValueTask ClearPlaybackAsync(CancellationToken cancellationToken)
     {
         ThrowIfUnavailable();
-        await writeLock.WaitAsync(cancellationToken);
-        try
+        ResetPendingPcmLocked();
+        KeyValuePair<string, PendingPlayback>[] cleared;
+        lock (playbackSynchronization)
         {
-            ThrowIfUnavailable();
-            ResetPendingPcmLocked();
-            foreach (string mark in pendingMarks.Keys)
-                _ = pendingMarks.TryRemove(mark, out _);
-            await SendWireMessageLockedAsync(new
-            {
-                @event = "clear",
-                streamSid = ProviderMediaStreamId,
-            }, cancellationToken);
-            Activity.Current?.AddEvent(new ActivityEvent("voice.twilio_clear_sent"));
+            cleared = pendingMarks.ToArray();
+            foreach (KeyValuePair<string, PendingPlayback> entry in cleared)
+                entry.Value.MarkCleared();
         }
-        finally
+        await SendWireMessageAsync(new
         {
-            writeLock.Release();
+            @event = "clear",
+            streamSid = ProviderMediaStreamId,
+        }, cancellationToken);
+        long now = timeProvider.GetTimestamp();
+        foreach ((string responseId, PendingPlayback pending) in cleared)
+        {
+            pending.Completion.TrySetResult(pending.Result(responseId, false, true, timeProvider, now));
         }
+        Activity.Current?.AddEvent(new ActivityEvent("voice.twilio_clear_sent"));
     }
 
     public async ValueTask CompleteAsync(string reason, CancellationToken cancellationToken)
@@ -220,6 +261,7 @@ public sealed class TwilioRealtimeAudioTransport : IRealtimeAudioTransport
             catch (OperationCanceledException) { }
         }
         socket.Dispose();
+        sendGate.Dispose();
         writeLock.Dispose();
     }
 
@@ -300,7 +342,14 @@ public sealed class TwilioRealtimeAudioTransport : IRealtimeAudioTransport
         TwilioRealtimeAudioProtocol.RequireMatchingStreamSid(root, ProviderMediaStreamId);
         JsonElement mark = TwilioRealtimeAudioProtocol.RequireObject(root, "mark");
         string name = TwilioRealtimeAudioProtocol.RequireString(mark, "name", 128);
-        bool acknowledged = pendingMarks.TryRemove(name, out _);
+        PendingPlayback? pending;
+        lock (playbackSynchronization) pendingMarks.TryGetValue(name, out pending);
+        bool acknowledged = pending is not null && !pending.IsCleared;
+        if (pending is not null && !pending.IsCleared)
+        {
+            long now = timeProvider.GetTimestamp();
+            pending.Completion.TrySetResult(pending.Result(name, true, false, timeProvider, now));
+        }
         Activity.Current?.SetTag("voice.mark_acknowledged", acknowledged);
         Activity.Current?.AddEvent(new ActivityEvent(
             "voice.playback_mark_acknowledged",
@@ -342,25 +391,25 @@ public sealed class TwilioRealtimeAudioTransport : IRealtimeAudioTransport
         return ReceiveEvent.Stop;
     }
 
-    private async ValueTask SendWireMessageLockedAsync<T>(T message, CancellationToken cancellationToken)
+    private async ValueTask SendWireMessageAsync<T>(T message, CancellationToken cancellationToken)
     {
-        byte[] json = JsonSerializer.SerializeToUtf8Bytes(message);
-        if (json.Length > options.MaxJsonMessageBytes)
-            throw new TwilioRealtimeAudioException(
-                "provider_media_message_too_large", "Provider media message exceeded its size limit.");
+        await writeLock.WaitAsync(cancellationToken);
         try
         {
-            await socket.SendAsync(json.AsMemory(), WebSocketMessageType.Text, true, cancellationToken);
+            ThrowIfUnavailable();
+            byte[] json = JsonSerializer.SerializeToUtf8Bytes(message);
+            if (json.Length > options.MaxJsonMessageBytes)
+                throw new TwilioRealtimeAudioException(
+                    "provider_media_message_too_large", "Provider media message exceeded its size limit.");
+            try { await socket.SendAsync(json.AsMemory(), WebSocketMessageType.Text, true, cancellationToken); }
+            finally { CryptographicOperations.ZeroMemory(json); }
         }
         catch (WebSocketException exception)
         {
             throw new TwilioRealtimeAudioException(
                 "provider_media_send_failed", "Provider media connection failed.", exception);
         }
-        finally
-        {
-            CryptographicOperations.ZeroMemory(json);
-        }
+        finally { writeLock.Release(); }
     }
 
     private void ValidatePcmChunk(SynthesizedAudioChunk chunk)
@@ -452,5 +501,29 @@ public sealed class TwilioRealtimeAudioTransport : IRealtimeAudioTransport
     {
         public static ReceiveEvent None => new(null, false);
         public static ReceiveEvent Stop => new(null, true);
+    }
+
+    private sealed class PendingPlayback(long firstMediaTimestamp, long markSentTimestamp)
+    {
+        private int cleared;
+
+        public TaskCompletionSource<RealtimePlaybackCompletion> Completion { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public bool IsCleared => Volatile.Read(ref cleared) != 0;
+
+        public void MarkCleared() => Interlocked.Exchange(ref cleared, 1);
+
+        public RealtimePlaybackCompletion Result(
+            string responseId,
+            bool acknowledged,
+            bool cleared,
+            TimeProvider provider,
+            long completedTimestamp) => new(
+                responseId,
+                acknowledged,
+                cleared,
+                provider.GetElapsedTime(firstMediaTimestamp, completedTimestamp).TotalMilliseconds,
+                provider.GetElapsedTime(markSentTimestamp, completedTimestamp).TotalMilliseconds);
     }
 }

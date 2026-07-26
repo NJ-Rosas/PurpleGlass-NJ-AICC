@@ -67,7 +67,10 @@ public sealed record VoicePlaybackEventDiagnostic(
     string Event,
     int MediaMessagesSent,
     double BufferedAudioDurationMs,
-    string SafeReason);
+    string SafeReason,
+    double ElapsedMs = 0,
+    double ElapsedFromFirstMediaMs = 0,
+    double ElapsedFromMarkSentMs = 0);
 
 public sealed record VoiceSessionExceptionDiagnostic(
     Guid CallId,
