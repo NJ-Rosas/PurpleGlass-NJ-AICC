@@ -120,6 +120,50 @@ public sealed class WebBffSecurityTests : IClassFixture<SecurityWebApplicationFa
         Assert.Equal(HttpStatusCode.OK, (await client.SendAsync(request)).StatusCode);
     }
 
+    [Theory]
+    [InlineData("administrator", "TenantAdministrator", "tenant.settings.manage", true)]
+    [InlineData("read-only", "ReadOnlyUser", "tenant.settings.manage", false)]
+    public async Task RenderOriginCanCompleteSecureDevelopmentLogin(
+        string user,
+        string expectedRole,
+        string administrativePermission,
+        bool permissionExpected)
+    {
+        await using var renderFactory = new SecurityWebApplicationFactory(renderProxy: true);
+        using HttpClient client = renderFactory.CreateClient();
+        client.BaseAddress = new Uri("https://purpleglass-web.onrender.com");
+
+        (HttpResponseMessage login, HttpResponseMessage session) = await LoginFromRenderAsync(client, user);
+
+        Assert.Equal(HttpStatusCode.NoContent, login.StatusCode);
+        string sessionCookie = login.Headers.GetValues("Set-Cookie")
+            .Single(value => value.StartsWith("PurpleGlass.Dev.Session=", StringComparison.Ordinal));
+        Assert.Contains("secure", sessionCookie, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("httponly", sessionCookie, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("samesite=lax", sessionCookie, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(HttpStatusCode.OK, session.StatusCode);
+        using JsonDocument projection = JsonDocument.Parse(await session.Content.ReadAsStringAsync());
+        Assert.Equal(expectedRole, projection.RootElement.GetProperty("role").GetString());
+        bool hasPermission = projection.RootElement.GetProperty("permissions").EnumerateArray()
+            .Any(permission => permission.GetString() == administrativePermission);
+        Assert.Equal(permissionExpected, hasPermission);
+    }
+
+    [Fact]
+    public async Task UntrustedBrowserOriginIsNotGrantedCorsAccess()
+    {
+        using HttpClient client = factory.CreateClient();
+        using var request = new HttpRequestMessage(HttpMethod.Options, "/bff/v1/security/development-login");
+        request.Headers.Add("Origin", "https://untrusted.example");
+        request.Headers.Add("Access-Control-Request-Method", "POST");
+        request.Headers.Add("Access-Control-Request-Headers", "content-type,x-csrf-token");
+
+        HttpResponseMessage response = await client.SendAsync(request);
+
+        Assert.NotEqual(HttpStatusCode.OK, response.StatusCode);
+        Assert.False(response.Headers.Contains("Access-Control-Allow-Origin"));
+    }
+
     [Fact]
     public async Task ReadOnlyUserCannotInitiateOutboundCall()
     {
@@ -300,11 +344,48 @@ public sealed class WebBffSecurityTests : IClassFixture<SecurityWebApplicationFa
         login.Headers.Add("X-CSRF-TOKEN", csrf);
         Assert.Equal(HttpStatusCode.NoContent, (await client.SendAsync(login)).StatusCode);
     }
+
+    private static async Task<(HttpResponseMessage Login, HttpResponseMessage Session)> LoginFromRenderAsync(
+        HttpClient client,
+        string user)
+    {
+        const string origin = "https://purpleglass-web.onrender.com";
+        client.DefaultRequestHeaders.Host = "purpleglass-web.onrender.com";
+        client.DefaultRequestHeaders.Add("X-Forwarded-Proto", "https");
+        client.DefaultRequestHeaders.Add("X-Forwarded-Host", "purpleglass-web.onrender.com");
+        client.DefaultRequestHeaders.Add("Origin", origin);
+        client.DefaultRequestHeaders.Add("Referer", $"{origin}/");
+
+        HttpResponseMessage csrf = await client.GetAsync("/bff/v1/security/csrf");
+        Assert.Equal(HttpStatusCode.OK, csrf.StatusCode);
+        string csrfCookie = csrf.Headers.GetValues("Set-Cookie")
+            .Single(value => value.StartsWith("PurpleGlass.Dev.Csrf=", StringComparison.Ordinal));
+        Assert.Contains("secure", csrfCookie, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("httponly", csrfCookie, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("samesite=strict", csrfCookie, StringComparison.OrdinalIgnoreCase);
+        string csrfCookiePair = csrfCookie[..csrfCookie.IndexOf(';')];
+        using JsonDocument token = JsonDocument.Parse(await csrf.Content.ReadAsStringAsync());
+
+        using var loginRequest = new HttpRequestMessage(HttpMethod.Post, "/bff/v1/security/development-login")
+        { Content = JsonContent.Create(new { user }) };
+        loginRequest.Headers.Add("X-CSRF-TOKEN", token.RootElement.GetProperty("token").GetString());
+        loginRequest.Headers.Add("Cookie", csrfCookiePair);
+        HttpResponseMessage login = await client.SendAsync(loginRequest);
+        string sessionCookie = login.Headers.GetValues("Set-Cookie")
+            .Single(value => value.StartsWith("PurpleGlass.Dev.Session=", StringComparison.Ordinal));
+        string sessionCookiePair = sessionCookie[..sessionCookie.IndexOf(';')];
+
+        using var sessionRequest = new HttpRequestMessage(HttpMethod.Get, "/bff/v1/session");
+        sessionRequest.Headers.Add("Cookie", sessionCookiePair);
+        HttpResponseMessage session = await client.SendAsync(sessionRequest);
+        return (login, session);
+    }
 }
 
 public sealed class SecurityWebApplicationFactory : WebApplicationFactory<WebBffAssembly>
 {
     private readonly bool includeUnhealthyReadinessCheck;
+    private readonly bool renderProxy;
 
     public SecurityWebApplicationFactory()
     {
@@ -313,15 +394,27 @@ public sealed class SecurityWebApplicationFactory : WebApplicationFactory<WebBff
     internal SecurityWebApplicationFactory(bool includeUnhealthyReadinessCheck) =>
         this.includeUnhealthyReadinessCheck = includeUnhealthyReadinessCheck;
 
+    internal SecurityWebApplicationFactory(bool renderProxy, bool includeUnhealthyReadinessCheck = false)
+    {
+        this.renderProxy = renderProxy;
+        this.includeUnhealthyReadinessCheck = includeUnhealthyReadinessCheck;
+    }
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseEnvironment("Development");
+        if (renderProxy)
+        {
+            builder.UseSetting("forwardedHeaders", "true");
+            builder.UseSetting("Security:ForceSecureCookies", "true");
+        }
         builder.ConfigureAppConfiguration((_, configuration) => configuration.AddInMemoryCollection(
             new Dictionary<string, string?>
             {
                 ["Security:AllowDevelopmentAuthentication"] = "true",
                 ["Security:AllowSyntheticDataOnly"] = "true",
                 ["Security:RequireHttps"] = "false",
+                ["Security:ForceSecureCookies"] = renderProxy ? "true" : "false",
                 ["AllowedHosts"] = "localhost;127.0.0.1;purpleglass-web.onrender.com",
             }));
         if (includeUnhealthyReadinessCheck)
