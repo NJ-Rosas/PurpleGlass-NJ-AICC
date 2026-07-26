@@ -34,13 +34,20 @@ The Web BFF has no persistent Data Protection key disk. ASP.NET Data Protection 
 ## Setup
 
 1. Create a free HiveMQ Cloud Serverless cluster. Create a least-privilege credential allowed to publish and subscribe to PurpleGlass `pg/...` topics.
-2. Push `render.yaml` to the GitHub branch Render tracks and create or update the Render Blueprint.
-3. Enter the required `sync: false` values on both services:
+2. Push `render.yaml` to the GitHub branch Render tracks and create or update the Render Blueprint. Non-secret cloud-development configuration comes from this file and must not be maintained as competing manual service overrides.
+3. Enter the required Render-managed `sync: false` values:
    - `Mqtt__Host`: the HiveMQ cluster hostname, without a scheme.
    - `Mqtt__Username`: the HiveMQ access-credential username.
    - `Mqtt__Password`: the HiveMQ access-credential password.
-4. Keep the Blueprint defaults that disable real telephony, AI, speech, Open Dental, and sensitive data.
-5. Deploy the Blueprint. Automatic deploys wait for GitHub checks.
+   - On `purpleglass-web`: `OpenAI__ApiKey`, `Telephony__Twilio__AccountSid`, and `Telephony__Twilio__AuthToken`.
+   - On `purpleglass-integrations-worker`: `Telephony__Twilio__AccountSid` and `Telephony__Twilio__AuthToken`.
+4. Sync the Blueprint, then deploy both services. Automatic deploys wait for GitHub checks.
+
+For an existing Blueprint, newly declared `sync: false` variables have names in source control but still require their values to be entered in the Render Dashboard. Blueprint synchronization never supplies a secret value.
+
+### Configuration precedence
+
+.NET loads the host's `appsettings.json`, then the environment-specific `appsettings.Development.json` when present, and finally environment variables. Environment variables use double underscores to map nested keys, so `Providers__EnableRealSpeech` overrides `Providers:EnableRealSpeech` from JSON. On Render, Blueprint sync applies the non-secret environment values declared in `render.yaml`; Render-managed `sync: false` values provide only the corresponding secrets/manual external inputs. A later service deploy consumes the environment already attached to that service but does not itself synchronize a changed Blueprint.
 
 The BFF reads Render's `PORT` and binds to `0.0.0.0:<PORT>`. The worker image exposes only a static `/health/live` endpoint for Render lifecycle management. Local `Start-PurpleGlass.ps1`, ports 5101/5173, PostgreSQL, Mosquitto, Valkey, frontend, BFF, and worker behavior remain unchanged.
 
@@ -50,28 +57,23 @@ Free Web Services do not support Render's paid pre-deploy command. The single BF
 
 Render uses BFF `/health/live` as its deployment health gate. This endpoint is process/container liveness: it confirms ASP.NET started, the HTTP server is responding, and the process is alive without making temporary external dependency failures restart a functioning service. BFF `/health/ready` remains the independent operational-readiness endpoint; it verifies PostgreSQL connectivity and telephony-provider readiness and should be checked after deployment before an experiment. The worker wrapper's `/health/live` confirms its container is awake; inspect sanitized worker logs to confirm MQTT connectivity and outbox progress.
 
-## Enable Twilio for a cloud-development call
+## Task 10 Twilio cloud-development configuration
 
-The Blueprint remains safe by default: do not change the disabled provider values in `render.yaml`. Enable Twilio with manual Render environment overrides only for the development experiment. OpenAI is not part of this path.
+The Blueprint is the source of truth for every non-secret Task 10 setting. It deterministically configures real Twilio transport and real OpenAI speech while retaining the fake language model:
 
-In the Render Dashboard, set these values on **both** `purpleglass-web` and `purpleglass-integrations-worker`:
+| Capability | Web BFF | Integrations worker |
+| --- | --- | --- |
+| Telephony | `Providers__EnableRealTelephony=true`, `Telephony__Provider=Twilio` | Same |
+| Public callback origin | `Telephony__PublicBaseUrl=https://purpleglass-web.onrender.com` | Same |
+| Speech | `Providers__EnableRealSpeech=true`, STT/TTS `OpenAI` | Not consumed or configured |
+| Language model | `Providers__EnableRealAI=false`, provider `Fake` | Not consumed or configured |
+| Open Dental / sensitive data | Disabled | Not applicable |
 
-- `Providers__EnableRealTelephony=true`
-- `Telephony__Provider=Twilio`
-- `Telephony__PublicBaseUrl=https://purpleglass-web.onrender.com`
-- `Telephony__Twilio__AccountSid=<Twilio Account SID>`
-- `Telephony__Twilio__AuthToken=<Twilio Auth Token>`
+Do not manually edit those variables for each deploy. A manual **service deploy** selects a source commit and rebuilds that service, but it does not apply changes from `render.yaml`. **Blueprint synchronization** applies the declared environment configuration and can replace conflicting manual dashboard values. This precedence is why the old Blueprint restored `Telephony__Provider=None` and `Providers__EnableRealSpeech=false`.
 
-On **`purpleglass-web` only**, configure the realtime speech path used by the Twilio Media Stream:
+Only secret values remain manual. Store the Twilio SID, Twilio Auth Token, OpenAI key, and MQTT credentials only in Render; never place them in the Blueprint, source control, logs, screenshots, or support output. Both services consume the Twilio credentials. Only the BFF consumes the OpenAI key for speech recognition and synthesis.
 
-- `Providers__EnableRealSpeech=true`
-- `SpeechToText__Provider=OpenAI`
-- `TextToSpeech__Provider=OpenAI`
-- `OpenAI__ApiKey=<OpenAI API key>`
-
-`Providers__EnableRealAI` may remain `false` with `LanguageModel__Provider=Fake` for the bounded development conversation, or it may be enabled with `LanguageModel__Provider=OpenAI` when a real language-model conversation is explicitly required. The fake speech adapter is simulator-only: it emits and accepts synthetic text frames and is not compatible with Twilio's 8 kHz media stream. PurpleGlass now reports that combination as `voice_media_provider_incompatible`, marks readiness degraded, disables the dashboard Call action, and rejects direct outbound requests before creating a durable/billable call.
-
-Store the SID, Auth Token, and OpenAI key only as Render secrets; never place them in the Blueprint, source control, logs, screenshots, or support output. Both services consume the Twilio credentials: the worker submits and updates calls, while the Web BFF verifies signed HTTP and WebSocket callbacks and validates the media Account SID. Only the BFF consumes the OpenAI key for speech recognition and synthesis.
+The fake speech adapter is simulator-only: it emits and accepts synthetic text frames and is not compatible with Twilio's 8 kHz media stream. PurpleGlass reports that combination as `voice_media_provider_incompatible`, marks readiness unavailable, disables the dashboard Call action, and rejects direct outbound requests before creating a durable/billable call.
 
 There is deliberately no `Telephony__Twilio__FromNumber` setting. PurpleGlass takes the outbound caller ID from its persisted telephony-number assignment for the administrator's tenant and location. Before calling, use the authenticated `PUT /bff/v1/telephony/numbers` administration endpoint to assign the Twilio number in E.164 format with `provider` set to `Twilio`, the selected `locationId`, `outboundEnabled: true`, and `active: true`. Set `inboundEnabled: true` only if inbound routing will also be tested. The request is CSRF-protected and requires the `ManageLocation` permission; do not create the row manually in PostgreSQL.
 
@@ -86,13 +88,23 @@ PurpleGlass uses these exact provider routes:
 
 Set the Twilio number's incoming Voice webhook to the inbound URL only when inbound calling is required. PurpleGlass reconstructs signature inputs from the canonical public base URL rather than Render's internal HTTP representation. `X-Twilio-Signature` verification is mandatory for all three webhooks and the media WebSocket.
 
-Before the first outbound test, deploy both services after saving their environment changes. Wake `purpleglass-web` and `purpleglass-integrations-worker` by opening their `/health/live` endpoints, wait for `https://purpleglass-web.onrender.com/health/ready` to return 200, and confirm the worker remains awake. Then sign in as the development administrator and call only the verified trial recipient. Do not use an automated test to place the call.
+For an existing Blueprint, use this exact workflow:
+
+1. Push the branch/commit containing the updated `render.yaml`.
+2. Confirm the Render Blueprint tracks that branch and commit.
+3. Sync the Blueprint configuration.
+4. Confirm all required `sync: false` secret values already exist; enter missing values manually without exposing them.
+5. Deploy both services from the same intended commit.
+6. Wake both free services through their `/health/live` endpoints.
+7. Require BFF `/health/live` to return HTTP 200.
+8. Require BFF `/health/ready` to return HTTP 200 with healthy PostgreSQL and telephony/voice checks.
+9. Only then sign in as the development administrator and perform the single Task 10 call to the verified trial recipient.
+
+Do not place the call when Blueprint sync is pending, a required secret is missing, or readiness is not HTTP 200.
 
 Watch the PurpleGlass call state/dashboard and SSE updates, the Twilio Call log, and sanitized Render logs. Safe failure categories include `telephony_number_unavailable`, `provider_rejected`, `provider_authentication_failed`, `provider_network_error`, `provider_timeout`, `provider_unavailable`, `invalid_provider_signature`, `public_base_url_invalid`, and `provider_disabled`. Twilio's Call log is the appropriate place to distinguish trial-recipient verification errors from other provider rejections. Never copy the Auth Token, authorization headers, signatures, phone numbers, audio, transcripts, or patient information into logs or reports.
 
-To disable Twilio again on both Render services, restore `Providers__EnableRealTelephony=false` and `Telephony__Provider=None`, redeploy, and verify `/health/ready`. Remove the three Twilio-specific values from each service when the experiment is over. Leave the AI and speech toggles false throughout.
-
-Initial provisioning does not request unused Twilio/OpenAI inputs. If OpenAI is enabled in a separate future task, store `OpenAI__ApiKey` only as a Render secret and use the existing provider selectors and safety switches.
+Task 10 intentionally uses `RealTelephony=true`, `RealSpeech=true`, and `RealAI=false`. To disable the live path later, change the non-secret Blueprint values together in a reviewed follow-up and sync the Blueprint; do not create long-lived manual overrides that drift from source control.
 
 `Security__ProductionOrigin` and production OIDC settings are not required while this synthetic cloud environment intentionally runs in `Development`. They become mandatory before moving to `Production`; that upgrade also requires persistent Data Protection keys and the existing server-owned identity mappings.
 

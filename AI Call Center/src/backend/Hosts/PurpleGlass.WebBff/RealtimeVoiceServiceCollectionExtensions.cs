@@ -35,10 +35,8 @@ public static class RealtimeVoiceServiceCollectionExtensions
 
         bool realAiEnabled = configuration.GetValue<bool>("Providers:EnableRealAI");
         bool realSpeechEnabled = configuration.GetValue<bool>("Providers:EnableRealSpeech");
-        if (languageModel == "OpenAI" && !realAiEnabled)
-            throw new InvalidOperationException("voice_provider_configuration_invalid: OpenAI language model requires Providers:EnableRealAI=true.");
-        if ((speechToText == "OpenAI" || textToSpeech == "OpenAI") && !realSpeechEnabled)
-            throw new InvalidOperationException("voice_provider_configuration_invalid: OpenAI speech requires Providers:EnableRealSpeech=true.");
+        VoiceProviderConfigurationValidator.Validate(
+            speechToText, textToSpeech, languageModel, realSpeechEnabled, realAiEnabled);
 
         services.AddSingleton(options);
         services.AddSingleton<IVoiceSessionStateSink, BffVoiceSessionStateSink>();

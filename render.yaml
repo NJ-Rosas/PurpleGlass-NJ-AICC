@@ -39,17 +39,31 @@ services:
       - key: Security__AllowSyntheticDataOnly
         value: true
       - key: Providers__EnableRealTelephony
-        value: false
+        value: true
       - key: Providers__EnableRealAI
         value: false
       - key: Providers__EnableRealSpeech
-        value: false
+        value: true
+      - key: SpeechToText__Provider
+        value: OpenAI
+      - key: TextToSpeech__Provider
+        value: OpenAI
+      - key: LanguageModel__Provider
+        value: Fake
       - key: Integrations__EnableOpenDental
         value: false
       - key: DataProtection__AllowSensitiveData
         value: false
       - key: Telephony__Provider
-        value: None
+        value: Twilio
+      - key: Telephony__PublicBaseUrl
+        value: https://purpleglass-web.onrender.com
+      - key: OpenAI__ApiKey
+        sync: false
+      - key: Telephony__Twilio__AccountSid
+        sync: false
+      - key: Telephony__Twilio__AuthToken
+        sync: false
   - type: web
     name: purpleglass-integrations-worker
     runtime: docker
@@ -78,9 +92,15 @@ services:
       - key: Mqtt__Password
         sync: false
       - key: Providers__EnableRealTelephony
-        value: false
+        value: true
       - key: Telephony__Provider
-        value: None
+        value: Twilio
+      - key: Telephony__PublicBaseUrl
+        value: https://purpleglass-web.onrender.com
+      - key: Telephony__Twilio__AccountSid
+        sync: false
+      - key: Telephony__Twilio__AuthToken
+        sync: false
 databases:
   - name: purpleglass-postgres
     plan: free

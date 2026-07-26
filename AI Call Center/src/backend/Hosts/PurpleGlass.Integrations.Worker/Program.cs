@@ -18,6 +18,7 @@ builder.Services.AddHostedService<Worker>();
 builder.Services.Configure<TelephonyRuntimeOptions>(builder.Configuration.GetSection(TelephonyRuntimeOptions.SectionName));
 string telephonyProvider = builder.Configuration["Telephony:Provider"] ?? "None";
 bool realTelephonyEnabled = builder.Configuration.GetValue<bool>("Providers:EnableRealTelephony");
+TelephonyProviderConfigurationValidator.Validate(telephonyProvider, realTelephonyEnabled);
 if (realTelephonyEnabled && telephonyProvider.Equals("Twilio", StringComparison.OrdinalIgnoreCase))
 {
     var twilioOptions = new TwilioTelephonyOptions

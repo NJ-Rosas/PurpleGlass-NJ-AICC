@@ -4,6 +4,7 @@ using PurpleGlass.Adapters.AI.Mock;
 using PurpleGlass.Adapters.Audio.Fake;
 using PurpleGlass.Adapters.Speech.Mock;
 using PurpleGlass.Modules.Conversation.Application;
+using PurpleGlass.WebBff;
 
 namespace PurpleGlass.UnitTests;
 
@@ -11,6 +12,27 @@ public sealed class RealtimeVoiceTests
 {
     private static readonly RuntimeInvocationContext Context = new(
         Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), "test-trace");
+
+    [Theory]
+    [InlineData("OpenAI", "Fake", "Fake", false, false, "SpeechToText:Provider=OpenAI", "Providers:EnableRealSpeech=true")]
+    [InlineData("Fake", "OpenAI", "Fake", false, false, "TextToSpeech:Provider=OpenAI", "Providers:EnableRealSpeech=true")]
+    [InlineData("Fake", "Fake", "OpenAI", true, false, "LanguageModel:Provider=OpenAI", "Providers:EnableRealAI=true")]
+    public void ProviderSwitchMismatchIdentifiesExactSettingAndExpectedValue(
+        string speechToText, string textToSpeech, string languageModel,
+        bool realSpeech, bool realAi, string invalidSetting, string expectedSetting)
+    {
+        InvalidOperationException exception = Assert.Throws<InvalidOperationException>(() =>
+            VoiceProviderConfigurationValidator.Validate(
+                speechToText, textToSpeech, languageModel, realSpeech, realAi));
+
+        Assert.Contains("voice_provider_configuration_invalid", exception.Message, StringComparison.Ordinal);
+        Assert.Contains(invalidSetting, exception.Message, StringComparison.Ordinal);
+        Assert.Contains(expectedSetting, exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Task10ProviderSwitchesAreCompatible() =>
+        VoiceProviderConfigurationValidator.Validate("OpenAI", "OpenAI", "Fake", true, false);
 
     [Fact]
     public void ExplicitEndpointFinalizesOneDeterministicUtterance()

@@ -9,6 +9,23 @@ namespace PurpleGlass.UnitTests;
 
 public sealed class TelephonyBoundaryTests
 {
+    [Fact]
+    public void TwilioRequiresExplicitRealTelephonySwitch()
+    {
+        InvalidOperationException exception = Assert.Throws<InvalidOperationException>(() =>
+            TelephonyProviderConfigurationValidator.Validate("Twilio", false));
+
+        Assert.Contains("Telephony:Provider=Twilio", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("Providers:EnableRealTelephony=true", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("Twilio", true)]
+    [InlineData("Fake", false)]
+    [InlineData("None", false)]
+    public void CompatibleTelephonyProviderSwitchesAreAccepted(string provider, bool enabled) =>
+        TelephonyProviderConfigurationValidator.Validate(provider, enabled);
+
     [Theory]
     [InlineData(true, "OpenAI", "OpenAI", true, "ready")]
     [InlineData(true, "Fake", "Fake", false, "voice_media_provider_incompatible")]

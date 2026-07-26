@@ -147,6 +147,7 @@ builder.Services.AddConversationInfrastructure(connectionString);
 builder.Services.AddEventingInfrastructure(connectionString);
 string telephonyProvider = builder.Configuration["Telephony:Provider"] ?? "None";
 bool realTelephonyEnabled = builder.Configuration.GetValue<bool>("Providers:EnableRealTelephony");
+TelephonyProviderConfigurationValidator.Validate(telephonyProvider, realTelephonyEnabled);
 if (realTelephonyEnabled && telephonyProvider.Equals("Twilio", StringComparison.OrdinalIgnoreCase))
 {
     var twilioOptions = new TwilioTelephonyOptions
