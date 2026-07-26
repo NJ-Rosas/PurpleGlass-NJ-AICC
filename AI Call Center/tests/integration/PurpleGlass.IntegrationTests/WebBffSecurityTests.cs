@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.EntityFrameworkCore;
 using PurpleGlass.Eventing;
 using PurpleGlass.Eventing.Infrastructure;
@@ -87,10 +88,24 @@ public sealed class WebBffSecurityTests : IClassFixture<SecurityWebApplicationFa
     {
         using HttpClient client = factory.CreateClient();
         HttpResponseMessage response = await client.GetAsync("/health/live");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.True(response.Headers.Contains("Content-Security-Policy"));
         Assert.Equal("nosniff", response.Headers.GetValues("X-Content-Type-Options").Single());
         Assert.Equal("no-referrer", response.Headers.GetValues("Referrer-Policy").Single());
         Assert.True(response.Headers.Contains("Permissions-Policy"));
+    }
+
+    [Fact]
+    public async Task RenderLivenessDoesNotBypassOperationalReadiness()
+    {
+        await using var unavailableDependencyFactory = new SecurityWebApplicationFactory(includeUnhealthyReadinessCheck: true);
+        using HttpClient client = unavailableDependencyFactory.CreateClient();
+
+        HttpResponseMessage live = await client.GetAsync("/health/live");
+        HttpResponseMessage ready = await client.GetAsync("/health/ready");
+
+        Assert.Equal(HttpStatusCode.OK, live.StatusCode);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, ready.StatusCode);
     }
 
     [Fact]
@@ -277,6 +292,15 @@ public sealed class WebBffSecurityTests : IClassFixture<SecurityWebApplicationFa
 
 public sealed class SecurityWebApplicationFactory : WebApplicationFactory<WebBffAssembly>
 {
+    private readonly bool includeUnhealthyReadinessCheck;
+
+    public SecurityWebApplicationFactory()
+    {
+    }
+
+    internal SecurityWebApplicationFactory(bool includeUnhealthyReadinessCheck) =>
+        this.includeUnhealthyReadinessCheck = includeUnhealthyReadinessCheck;
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseEnvironment("Development");
@@ -285,7 +309,14 @@ public sealed class SecurityWebApplicationFactory : WebApplicationFactory<WebBff
             {
                 ["Security:AllowDevelopmentAuthentication"] = "true",
                 ["Security:AllowSyntheticDataOnly"] = "true",
-                ["Security:RequireHttps"] = "false"
+                ["Security:RequireHttps"] = "false",
             }));
+        if (includeUnhealthyReadinessCheck)
+        {
+            builder.ConfigureServices(services => services.AddHealthChecks().AddCheck(
+                "unavailable-dependency",
+                () => HealthCheckResult.Unhealthy("Synthetic dependency failure."),
+                tags: ["ready"]));
+        }
     }
 }

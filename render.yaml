@@ -6,7 +6,7 @@ services:
     region: oregon
     dockerContext: ./AI Call Center
     dockerfilePath: ./AI Call Center/deploy/render/Dockerfile.web
-    healthCheckPath: /health/ready
+    healthCheckPath: /health/live
     autoDeployTrigger: checksPass
     numInstances: 1
     envVars:

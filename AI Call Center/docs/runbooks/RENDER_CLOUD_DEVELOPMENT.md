@@ -48,7 +48,7 @@ The BFF reads Render's `PORT` and binds to `0.0.0.0:<PORT>`. The worker image ex
 
 Free Web Services do not support Render's paid pre-deploy command. The single BFF container therefore runs the dedicated `PurpleGlass.Migrations` executable before starting the web process. Only the one-instance BFF performs migrations; the worker never migrates. Repeated cold starts safely find the schema current. During a deploy, the old BFF can remain available while the replacement performs migration.
 
-Render checks BFF `/health/ready`, which verifies PostgreSQL and telephony readiness. `/health/live` is process liveness. The worker wrapper's `/health/live` confirms its container is awake; inspect sanitized worker logs to confirm MQTT connectivity and outbox progress.
+Render uses BFF `/health/live` as its deployment health gate. This endpoint is process/container liveness: it confirms ASP.NET started, the HTTP server is responding, and the process is alive without making temporary external dependency failures restart a functioning service. BFF `/health/ready` remains the independent operational-readiness endpoint; it verifies PostgreSQL connectivity and telephony-provider readiness and should be checked after deployment before an experiment. The worker wrapper's `/health/live` confirms its container is awake; inspect sanitized worker logs to confirm MQTT connectivity and outbox progress.
 
 ## Provider enablement later
 
@@ -82,6 +82,6 @@ Set `Telephony__PublicBaseUrl` to the exact public HTTPS BFF origin. PurpleGlass
 - **Twilio 403/signature failure:** make `Telephony__PublicBaseUrl` exactly match the external callback origin and verify the Twilio secret values; never disable validation.
 - **OpenAI unavailable:** verify the provider selectors, safety switches, and `OpenAI__ApiKey`. Fake providers require no key.
 - **Session disappeared:** a BFF restart replaced its ephemeral Data Protection keys; clear stale cookies and sign in again.
-- **Health check failed:** wake the dependency, check BFF `/health/ready`, and inspect only sanitized logs.
+- **Render deployment health failed:** check BFF `/health/live` and sanitized startup logs. After deployment, check `/health/ready`; if it is not healthy, restore the affected operational dependency before an experiment.
 
 OpenTelemetry export remains optional. Never log or commit connection strings, MQTT/Twilio/OpenAI credentials, provider signatures, phone numbers, transcripts, prompts, or audio.
