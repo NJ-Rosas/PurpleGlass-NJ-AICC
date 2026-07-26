@@ -19,9 +19,11 @@ using PurpleGlass.Modules.Tenancy.Application;
 using PurpleGlass.Modules.Tenancy.Contracts;
 using PurpleGlass.Modules.Tenancy.Infrastructure;
 using PurpleGlass.WebBff;
+using PurpleGlass.Observability;
 using System.Threading.RateLimiting;
 
 var builder = WebApplication.CreateBuilder(args);
+builder.Services.AddPurpleGlassObservability(builder.Configuration, "PurpleGlass.WebBff", builder.Environment.EnvironmentName);
 
 string connectionString = builder.Configuration.GetConnectionString("Postgres")
     ?? throw new InvalidOperationException("ConnectionStrings:Postgres is required.");
@@ -173,7 +175,8 @@ bff.MapPost("/security/development-login", async (
     await audit.WriteAsync(identity.Membership.TenantId, identity.ActiveLocationId,
         identity.User.Id.ToString("D"), "Login", "BrowserSession", identity.User.Id.ToString("D"),
         "Allowed", "development_authentication", Guid.NewGuid(), cancellationToken);
-    SecurityLog.DevelopmentAuthenticationUsed(app.Logger, subject);
+    PurpleGlassTelemetry.SecurityAuthSuccess.Add(1, new KeyValuePair<string, object?>("method", "development"));
+    SecurityLog.DevelopmentAuthenticationUsed(app.Logger);
     return Results.NoContent();
 }).RequireRateLimiting("security");
 
@@ -248,11 +251,23 @@ protectedBff.MapGet("/events", async (HttpContext httpContext, RealtimeEventHub 
     httpContext.Response.ContentType = "text/event-stream";
     RequestContext context = accessor.Current;
     await using RealtimeSubscription subscription = hub.Subscribe(context.TenantId, context.LocationId);
-    await foreach (RealtimeEvent realtimeEvent in subscription.Reader.ReadAllAsync(cancellationToken))
+    PurpleGlassTelemetry.ActiveSseConnections.Add(1);
+    using var connectionActivity = PurpleGlassTelemetry.WebBff.StartActivity("sse.connection", System.Diagnostics.ActivityKind.Server);
+    try
     {
-        await httpContext.Response.WriteAsync($"event: {realtimeEvent.EventType}\n", cancellationToken);
-        await httpContext.Response.WriteAsync($"data: {realtimeEvent.Payload}\n\n", cancellationToken);
-        await httpContext.Response.Body.FlushAsync(cancellationToken);
+        await foreach (RealtimeEvent realtimeEvent in subscription.Reader.ReadAllAsync(cancellationToken))
+        {
+            using var delivery = PurpleGlassTelemetry.WebBff.StartActivity("sse.deliver", System.Diagnostics.ActivityKind.Producer);
+            delivery?.SetTag("purpleglass.correlation_id", realtimeEvent.CorrelationId);
+            await httpContext.Response.WriteAsync($"id: {realtimeEvent.CorrelationId:D}\n", cancellationToken);
+            await httpContext.Response.WriteAsync($"event: {realtimeEvent.EventType}\n", cancellationToken);
+            await httpContext.Response.WriteAsync($"data: {realtimeEvent.Payload}\n\n", cancellationToken);
+            await httpContext.Response.Body.FlushAsync(cancellationToken);
+        }
+    }
+    finally
+    {
+        PurpleGlassTelemetry.ActiveSseConnections.Add(-1);
     }
 }).RequireAuthorization(SecurityPolicies.ViewCalls).RequireRateLimiting("sse");
 
@@ -275,8 +290,8 @@ namespace PurpleGlass.WebBff
     public static partial class SecurityLog
     {
         [LoggerMessage(EventId = 100, Level = LogLevel.Warning,
-            Message = "Development authentication used for synthetic identity {Subject}.")]
-        public static partial void DevelopmentAuthenticationUsed(ILogger logger, string subject);
+            Message = "Development authentication used for a synthetic identity.")]
+        public static partial void DevelopmentAuthenticationUsed(ILogger logger);
     }
 
     public sealed class SecurityExceptionHandler(IProblemDetailsService problemDetailsService) : IExceptionHandler
@@ -299,6 +314,9 @@ namespace PurpleGlass.WebBff
                 ArgumentException => (400, "Invalid request", "invalid_request"),
                 _ => (500, "An unexpected error occurred", "unexpected_error")
             };
+            if (code == "csrf_validation_failed") PurpleGlassTelemetry.SecurityCsrfFailure.Add(1);
+            else if (status == 401) PurpleGlassTelemetry.SecurityAuthFailure.Add(1);
+            else if (status == 403) PurpleGlassTelemetry.SecurityAuthorizationDenied.Add(1);
             if (httpContext.User.Identity?.IsAuthenticated == true && status is 403 or 404)
             {
                 SecurityAuditService audit = httpContext.RequestServices.GetRequiredService<SecurityAuditService>();

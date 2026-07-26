@@ -1,6 +1,8 @@
 using PurpleGlass.CallOrchestrator.Worker;
+using PurpleGlass.Observability;
 
 var builder = WebApplication.CreateBuilder(args);
+builder.Services.AddPurpleGlassObservability(builder.Configuration, "PurpleGlass.CallOrchestrator", builder.Environment.EnvironmentName);
 builder.Services.AddCallOrchestrator(builder.Configuration);
 
 var app = builder.Build();

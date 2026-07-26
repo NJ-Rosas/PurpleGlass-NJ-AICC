@@ -7,6 +7,7 @@ using PurpleGlass.Modules.CallManagement.Contracts;
 using PurpleGlass.Modules.Conversation.Application;
 using PurpleGlass.Modules.Conversation.Contracts;
 using PurpleGlass.Modules.Conversation.Domain;
+using PurpleGlass.Observability;
 
 namespace PurpleGlass.CallOrchestrator.Worker;
 
@@ -26,6 +27,13 @@ public sealed partial class CallOrchestrationService(
     {
         ArgumentNullException.ThrowIfNull(request);
         Validate(request);
+        long orchestrationStarted = timeProvider.GetTimestamp();
+        using Activity? orchestration = PurpleGlassTelemetry.Calls.StartActivity("call.orchestrate", ActivityKind.Internal);
+        orchestration?.SetTag("purpleglass.correlation_id", request.CorrelationId);
+        orchestration?.SetTag("purpleglass.tenant_id", request.TenantId);
+        orchestration?.SetTag("purpleglass.location_id", request.LocationId);
+        orchestration?.SetTag("purpleglass.call.direction", request.Direction.ToString());
+        PurpleGlassTelemetry.CallsStarted.Add(1, new KeyValuePair<string, object?>("direction", request.Direction.ToString()));
         CallSummary? call = null;
         ConversationStatusProjection? conversation = null;
         var audioResponses = new List<SynthesizedAssistantResponse>();
@@ -45,6 +53,7 @@ public sealed partial class CallOrchestrationService(
         try
         {
             call = await StartCallAsync(request, cancellationToken);
+            orchestration?.SetTag("purpleglass.call_id", call.CallId);
             stateTransitions.Add($"Call:{call.State}");
             if (request.Direction == SimulatedCallDirection.Outbound)
             {
@@ -62,6 +71,8 @@ public sealed partial class CallOrchestrationService(
             call = await calls.MarkInConversationAsync(ChangeCall(request, call), cancellationToken);
             stateTransitions.Add($"Call:{call.State}");
             LogConversationStarted(logger, call.CallId, conversation.ConversationId, request.CorrelationId);
+            orchestration?.SetTag("purpleglass.conversation_id", conversation.ConversationId);
+            PurpleGlassTelemetry.ConversationsStarted.Add(1);
 
             conversation = await PersistAssistantAsync(
                 request, conversation, DeterministicId(call.CallId, "greeting"), options.Conversation.Greeting,
@@ -147,6 +158,7 @@ public sealed partial class CallOrchestrationService(
                     escalated = true;
                     outcome = response.Intent == "urgent-safety" ? "urgent_escalation" : "escalated";
                     LogEscalation(logger, call.CallId, conversation.ConversationId, outcome);
+                    PurpleGlassTelemetry.CallsEscalated.Add(1, new KeyValuePair<string, object?>("outcome", outcome));
                 }
 
                 shouldEnd = response.ShouldEndConversation || escalated;
@@ -171,6 +183,10 @@ public sealed partial class CallOrchestrationService(
             transcript = await conversations.GetTranscriptAsync(request.TenantId, conversation.ConversationId, cancellationToken);
 
             LogOrchestrationCompleted(logger, call.CallId, conversation.ConversationId, outcome);
+            orchestration?.SetTag("purpleglass.outcome", outcome);
+            PurpleGlassTelemetry.CallsCompleted.Add(1, new KeyValuePair<string, object?>("outcome", outcome));
+            PurpleGlassTelemetry.ConversationsCompleted.Add(1, new KeyValuePair<string, object?>("outcome", outcome));
+            PurpleGlassTelemetry.CallsDuration.Record(timeProvider.GetElapsedTime(orchestrationStarted).TotalMilliseconds, new KeyValuePair<string, object?>("outcome", outcome));
             return new(call.CallId, conversation.ConversationId, request.Direction, call.State, conversation.State,
                 conversation.Escalated, outcome, stateTransitions, transcript, completedSummary, audioResponses);
         }
@@ -178,6 +194,8 @@ public sealed partial class CallOrchestrationService(
         {
             await CleanupAsync(request, call, conversation, "cancelled");
             LogOrchestrationCancelled(logger, call?.CallId ?? Guid.Empty, conversation?.ConversationId ?? Guid.Empty);
+            orchestration?.SetStatus(ActivityStatusCode.Error, "cancelled");
+            PurpleGlassTelemetry.CallsFailed.Add(1, new KeyValuePair<string, object?>("outcome", "cancelled"));
             throw;
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
@@ -186,6 +204,9 @@ public sealed partial class CallOrchestrationService(
                 ? orchestrationException.Code : "orchestration_failed";
             await CleanupAsync(request, call, conversation, code);
             LogOrchestrationFailed(logger, call?.CallId ?? Guid.Empty, conversation?.ConversationId ?? Guid.Empty, code, exception);
+            orchestration?.SetStatus(ActivityStatusCode.Error, code);
+            PurpleGlassTelemetry.CallsFailed.Add(1, new KeyValuePair<string, object?>("outcome", code));
+            PurpleGlassTelemetry.CallsDuration.Record(timeProvider.GetElapsedTime(orchestrationStarted).TotalMilliseconds, new KeyValuePair<string, object?>("outcome", "failed"));
             return await BuildFailureResultAsync(request, call, conversation, stateTransitions, audioResponses, code);
         }
     }
@@ -241,6 +262,10 @@ public sealed partial class CallOrchestrationService(
         for (int attempt = 1; attempt <= options.MaximumAdapterAttempts; attempt++)
         {
             long started = Stopwatch.GetTimestamp();
+            using Activity? activity = PurpleGlassTelemetry.Calls.StartActivity(OperationSpanName(operation), ActivityKind.Client);
+            activity?.SetTag("purpleglass.adapter", adapter);
+            activity?.SetTag("purpleglass.attempt", attempt);
+            RecordAdapterRequest(operation);
             using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeoutSource.CancelAfter(timeout);
             try
@@ -249,6 +274,12 @@ public sealed partial class CallOrchestrationService(
                 RuntimeFailure? failure = getFailure(result);
                 LogAdapterInvocation(logger, adapter, operation, Stopwatch.GetElapsedTime(started).TotalMilliseconds,
                     failure is null ? "success" : failure.Code);
+                RecordAdapterDuration(operation, Stopwatch.GetElapsedTime(started).TotalMilliseconds, adapter);
+                if (failure is not null)
+                {
+                    RecordAdapterFailure(operation);
+                    activity?.SetStatus(ActivityStatusCode.Error, failure.Code);
+                }
                 if (failure is null) return result;
                 if (!failure.Retryable || attempt == options.MaximumAdapterAttempts)
                     throw new CallOrchestrationException(failure.Code, failure.SafeMessage);
@@ -256,6 +287,8 @@ public sealed partial class CallOrchestrationService(
             catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
             {
                 LogAdapterTimeout(logger, adapter, operation, attempt);
+                RecordAdapterFailure(operation);
+                activity?.SetStatus(ActivityStatusCode.Error, "timeout");
                 if (attempt == options.MaximumAdapterAttempts)
                     throw new CallOrchestrationException($"{operation}_timeout", $"The {operation} adapter timed out.", exception);
             }
@@ -264,6 +297,36 @@ public sealed partial class CallOrchestrationService(
         }
 
         throw new UnreachableException();
+    }
+
+    private static string OperationSpanName(string operation) => operation switch
+    {
+        "recognize" => "speech.recognize",
+        "generate" => "ai.generate",
+        "synthesize" => "speech.synthesize",
+        _ => $"adapter.{operation}"
+    };
+
+    private static void RecordAdapterRequest(string operation)
+    {
+        if (operation == "recognize") PurpleGlassTelemetry.SpeechRecognitionRequests.Add(1);
+        else if (operation == "generate") PurpleGlassTelemetry.AiRequests.Add(1);
+        else if (operation == "synthesize") PurpleGlassTelemetry.SpeechSynthesisRequests.Add(1);
+    }
+
+    private static void RecordAdapterFailure(string operation)
+    {
+        if (operation == "recognize") PurpleGlassTelemetry.SpeechRecognitionFailures.Add(1);
+        else if (operation == "generate") PurpleGlassTelemetry.AiFailures.Add(1);
+        else if (operation == "synthesize") PurpleGlassTelemetry.SpeechSynthesisFailures.Add(1);
+    }
+
+    private static void RecordAdapterDuration(string operation, double durationMs, string adapter)
+    {
+        var tag = new KeyValuePair<string, object?>("adapter", adapter);
+        if (operation == "recognize") PurpleGlassTelemetry.SpeechRecognitionDuration.Record(durationMs, tag);
+        else if (operation == "generate") PurpleGlassTelemetry.AiDuration.Record(durationMs, tag);
+        else if (operation == "synthesize") PurpleGlassTelemetry.SpeechSynthesisDuration.Record(durationMs, tag);
     }
 
     private async Task CleanupAsync(

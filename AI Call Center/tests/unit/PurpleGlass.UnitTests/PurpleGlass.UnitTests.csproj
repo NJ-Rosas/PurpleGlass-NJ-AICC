@@ -20,6 +20,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\..\src\backend\BuildingBlocks\PurpleGlass.Testing\PurpleGlass.Testing.csproj" />
+    <ProjectReference Include="..\..\..\src\backend\BuildingBlocks\PurpleGlass.Eventing\PurpleGlass.Eventing.csproj" />
+    <ProjectReference Include="..\..\..\src\backend\BuildingBlocks\PurpleGlass.Observability\PurpleGlass.Observability.csproj" />
     <ProjectReference Include="..\..\..\src\backend\Modules\Tenancy\Domain\PurpleGlass.Modules.Tenancy.Domain.csproj" />
     <ProjectReference Include="..\..\..\src\backend\Modules\Tenancy\Application\PurpleGlass.Modules.Tenancy.Application.csproj" />
     <ProjectReference Include="..\..\..\src\backend\Modules\Audit\Domain\PurpleGlass.Modules.Audit.Domain.csproj" />

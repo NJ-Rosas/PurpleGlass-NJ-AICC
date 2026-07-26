@@ -1,4 +1,5 @@
 import { BaseQueryFn, FetchArgs, FetchBaseQueryError, createApi, fetchBaseQuery } from '@reduxjs/toolkit/query/react'
+import { reportOperationalFailure } from './operationalDiagnostics'
 
 export interface SessionProjection {
   userId: string
@@ -80,6 +81,10 @@ const secureBaseQuery: BaseQueryFn<string | FetchArgs, unknown, FetchBaseQueryEr
   }
   const result = await rawBaseQuery(securedArgs, api, extraOptions)
   if (result.error?.status === 401) clearCsrfToken()
+  if (result.error && result.error.status !== 401 && result.error.status !== 403) {
+    const response = result.meta?.response
+    reportOperationalFailure('api.request_failed', response?.headers.get('X-Correlation-Id') ?? undefined)
+  }
   return result
 }
 

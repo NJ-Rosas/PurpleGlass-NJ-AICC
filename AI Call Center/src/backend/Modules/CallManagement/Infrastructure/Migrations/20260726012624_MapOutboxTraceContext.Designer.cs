@@ -2,18 +2,21 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
-using PurpleGlass.Modules.Conversation.Infrastructure;
+using PurpleGlass.Modules.CallManagement.Infrastructure;
 
 #nullable disable
 
-namespace PurpleGlass.Modules.Conversation.Infrastructure.Migrations
+namespace PurpleGlass.Modules.CallManagement.Infrastructure.Migrations
 {
-    [DbContext(typeof(ConversationDbContext))]
-    partial class ConversationDbContextModelSnapshot : ModelSnapshot
+    [DbContext(typeof(CallManagementDbContext))]
+    [Migration("20260726012624_MapOutboxTraceContext")]
+    partial class MapOutboxTraceContext
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -111,21 +114,16 @@ namespace PurpleGlass.Modules.Conversation.Infrastructure.Migrations
                         });
                 });
 
-            modelBuilder.Entity("PurpleGlass.Modules.Conversation.Domain.Conversation", b =>
+            modelBuilder.Entity("PurpleGlass.Modules.CallManagement.Domain.CallSession", b =>
                 {
                     b.Property<Guid>("Id")
                         .HasColumnType("uuid");
 
-                    b.Property<Guid>("CallSession")
-                        .HasColumnType("uuid");
+                    b.Property<DateTimeOffset?>("AnsweredAtUtc")
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<DateTimeOffset?>("CompletedAtUtc")
                         .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("ConfigurationVersion")
-                        .IsRequired()
-                        .HasMaxLength(100)
-                        .HasColumnType("character varying(100)");
 
                     b.Property<Guid>("CorrelationId")
                         .HasColumnType("uuid");
@@ -133,26 +131,55 @@ namespace PurpleGlass.Modules.Conversation.Infrastructure.Migrations
                     b.Property<DateTimeOffset>("CreatedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
-                    b.Property<bool>("Escalated")
-                        .HasColumnType("boolean");
-
-                    b.Property<string>("EscalationReason")
-                        .HasMaxLength(500)
-                        .HasColumnType("character varying(500)");
+                    b.Property<int>("Direction")
+                        .HasColumnType("integer");
 
                     b.Property<DateTimeOffset?>("FailedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
-                    b.Property<string>("Language")
+                    b.Property<string>("FromNumber")
                         .IsRequired()
-                        .HasMaxLength(35)
-                        .HasColumnType("character varying(35)");
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
 
                     b.Property<Guid>("LocationId")
                         .HasColumnType("uuid");
 
-                    b.Property<DateTimeOffset?>("StartedAtUtc")
+                    b.Property<string>("Outcome")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<string>("ProviderCallId")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<DateTimeOffset?>("RecordedAtUtc")
                         .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("RecordingChecksum")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<string>("RecordingContentType")
+                        .HasMaxLength(150)
+                        .HasColumnType("character varying(150)");
+
+                    b.Property<long?>("RecordingDurationMilliseconds")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("RecordingReference")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<DateTimeOffset?>("RecordingRetentionEligibleAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<long?>("RecordingSizeBytes")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("RecordingStorageProvider")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
 
                     b.Property<int>("State")
                         .HasColumnType("integer");
@@ -160,131 +187,55 @@ namespace PurpleGlass.Modules.Conversation.Infrastructure.Migrations
                     b.Property<Guid>("TenantId")
                         .HasColumnType("uuid");
 
+                    b.Property<string>("ToNumber")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
                     b.Property<long>("Version")
                         .IsConcurrencyToken()
                         .HasColumnType("bigint");
 
                     b.HasKey("Id");
 
-                    b.HasIndex("TenantId", "CallSession")
+                    b.HasIndex("TenantId", "Id")
                         .IsUnique();
+
+                    b.HasIndex("TenantId", "ProviderCallId")
+                        .IsUnique()
+                        .HasFilter("\"ProviderCallId\" IS NOT NULL");
 
                     b.HasIndex("TenantId", "LocationId", "CreatedAtUtc");
 
-                    b.ToTable("conversations", "conversation");
+                    b.ToTable("call_sessions", "call_management");
                 });
 
-            modelBuilder.Entity("PurpleGlass.Modules.Conversation.Domain.ConversationTurn", b =>
+            modelBuilder.Entity("PurpleGlass.Modules.CallManagement.Infrastructure.OutboundRequestReceipt", b =>
                 {
                     b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
-                    b.Property<Guid>("ConversationId")
+                    b.Property<Guid>("CallId")
                         .HasColumnType("uuid");
 
                     b.Property<DateTimeOffset>("CreatedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
-                    b.Property<DateTimeOffset?>("EndedAtUtc")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<bool>("EscalationFlagged")
-                        .HasColumnType("boolean");
-
-                    b.Property<decimal?>("RecognitionConfidence")
-                        .HasPrecision(5, 4)
-                        .HasColumnType("numeric(5,4)");
-
-                    b.Property<bool>("SafetyFlagged")
-                        .HasColumnType("boolean");
-
-                    b.Property<int>("SequenceNumber")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("Speaker")
-                        .HasColumnType("integer");
-
-                    b.Property<DateTimeOffset?>("StartedAtUtc")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("Text")
+                    b.Property<string>("IdempotencyKey")
                         .IsRequired()
-                        .HasMaxLength(8000)
-                        .HasColumnType("character varying(8000)");
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid");
 
                     b.HasKey("Id");
 
-                    b.HasIndex("ConversationId", "SequenceNumber")
+                    b.HasIndex("TenantId", "IdempotencyKey")
                         .IsUnique();
 
-                    b.ToTable("conversation_turns", "conversation");
-                });
-
-            modelBuilder.Entity("PurpleGlass.Modules.Conversation.Domain.Conversation", b =>
-                {
-                    b.OwnsOne("PurpleGlass.Modules.Conversation.Domain.ConversationSummary", "Summary", b1 =>
-                        {
-                            b1.Property<Guid>("ConversationId")
-                                .HasColumnType("uuid");
-
-                            b1.Property<string>("CallerIntent")
-                                .HasMaxLength(200)
-                                .HasColumnType("character varying(200)")
-                                .HasColumnName("SummaryCallerIntent");
-
-                            b1.Property<string>("ConfigurationVersion")
-                                .IsRequired()
-                                .HasMaxLength(100)
-                                .HasColumnType("character varying(100)")
-                                .HasColumnName("SummaryConfigurationVersion");
-
-                            b1.Property<bool>("Escalated")
-                                .HasColumnType("boolean")
-                                .HasColumnName("SummaryEscalated");
-
-                            b1.Property<bool>("FollowUpRequired")
-                                .HasColumnType("boolean")
-                                .HasColumnName("SummaryFollowUpRequired");
-
-                            b1.Property<DateTimeOffset>("GeneratedAtUtc")
-                                .HasColumnType("timestamp with time zone")
-                                .HasColumnName("SummaryGeneratedAtUtc");
-
-                            b1.Property<string>("Outcome")
-                                .IsRequired()
-                                .HasMaxLength(200)
-                                .HasColumnType("character varying(200)")
-                                .HasColumnName("SummaryOutcome");
-
-                            b1.Property<string>("Text")
-                                .IsRequired()
-                                .HasMaxLength(4000)
-                                .HasColumnType("character varying(4000)")
-                                .HasColumnName("SummaryText");
-
-                            b1.HasKey("ConversationId");
-
-                            b1.ToTable("conversations", "conversation");
-
-                            b1.WithOwner()
-                                .HasForeignKey("ConversationId");
-                        });
-
-                    b.Navigation("Summary");
-                });
-
-            modelBuilder.Entity("PurpleGlass.Modules.Conversation.Domain.ConversationTurn", b =>
-                {
-                    b.HasOne("PurpleGlass.Modules.Conversation.Domain.Conversation", null)
-                        .WithMany("Turns")
-                        .HasForeignKey("ConversationId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-                });
-
-            modelBuilder.Entity("PurpleGlass.Modules.Conversation.Domain.Conversation", b =>
-                {
-                    b.Navigation("Turns");
+                    b.ToTable("outbound_request_receipts", "call_management");
                 });
 #pragma warning restore 612, 618
         }

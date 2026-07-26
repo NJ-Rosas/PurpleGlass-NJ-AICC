@@ -104,7 +104,7 @@ public sealed class TenancyDbContext(DbContextOptions<TenancyDbContext> options)
 
     private static void ConfigureOutbox(EntityTypeBuilder<OutboxMessage> outbox)
     {
-        outbox.ToTable("outbox_messages", "eventing");
+        outbox.ToTable("outbox_messages", "eventing", table => table.ExcludeFromMigrations());
         outbox.HasKey(message => message.Id);
         outbox.Property(message => message.Topic).HasMaxLength(500).IsRequired();
         outbox.Property(message => message.MessageType).HasMaxLength(200).IsRequired();
@@ -112,7 +112,9 @@ public sealed class TenancyDbContext(DbContextOptions<TenancyDbContext> options)
         outbox.Property(message => message.LastError).HasMaxLength(1_000);
         outbox.Ignore(message => message.SchemaVersion);
         outbox.Ignore(message => message.CausationId);
-        outbox.Ignore(message => message.TraceId);
+        outbox.Property(message => message.TraceId).HasMaxLength(100);
+        outbox.Property(message => message.TraceParent).HasMaxLength(100);
+        outbox.Property(message => message.TraceState).HasMaxLength(512);
         outbox.Ignore(message => message.Producer);
         outbox.Ignore(message => message.DataClassification);
         outbox.Ignore(message => message.Status);

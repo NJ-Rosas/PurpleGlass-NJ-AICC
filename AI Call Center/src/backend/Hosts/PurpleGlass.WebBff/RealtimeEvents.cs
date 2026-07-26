@@ -3,12 +3,20 @@ using System.Collections.Concurrent;
 using System.Text;
 using System.Threading.Channels;
 using MQTTnet;
+using PurpleGlass.Observability;
+using System.Diagnostics;
 
 namespace PurpleGlass.WebBff;
 
-public sealed record RealtimeEvent(Guid TenantId, string EventType, string Payload)
+public sealed record RealtimeEvent(Guid TenantId, Guid? LocationId, Guid CorrelationId, Guid MessageId, string EventType, string Payload, string? TraceParent, string? TraceState)
 {
-    public static bool TryCreate(string topic, string payload, out RealtimeEvent? realtimeEvent)
+    public RealtimeEvent(Guid tenantId, string eventType, string payload)
+        : this(tenantId, null, Guid.Empty, Guid.Empty, eventType, payload, null, null) { }
+
+    public static bool TryCreate(string topic, string payload, out RealtimeEvent? realtimeEvent) =>
+        TryCreate(topic, payload, new Dictionary<string, string>(), out realtimeEvent);
+
+    public static bool TryCreate(string topic, string payload, IReadOnlyDictionary<string, string> metadata, out RealtimeEvent? realtimeEvent)
     {
         string[] segments = topic.Split('/', StringSplitOptions.RemoveEmptyEntries);
         bool recognizedShape =
@@ -21,7 +29,12 @@ public sealed record RealtimeEvent(Guid TenantId, string EventType, string Paylo
             && Guid.TryParse(tenantId, out Guid parsedTenantId)
             && !string.IsNullOrWhiteSpace(eventType))
         {
-            realtimeEvent = new RealtimeEvent(parsedTenantId, eventType, payload);
+            _ = Guid.TryParse(metadata.GetValueOrDefault("location-id"), out Guid locationId);
+            _ = Guid.TryParse(metadata.GetValueOrDefault("correlation-id"), out Guid correlationId);
+            _ = Guid.TryParse(metadata.GetValueOrDefault("message-id"), out Guid messageId);
+            realtimeEvent = new RealtimeEvent(parsedTenantId, locationId == Guid.Empty ? null : locationId,
+                correlationId, messageId, eventType, payload,
+                metadata.GetValueOrDefault("traceparent"), metadata.GetValueOrDefault("tracestate"));
             return true;
         }
 
@@ -51,7 +64,8 @@ public sealed class RealtimeEventHub
     {
         foreach (Subscriber subscriber in subscribers.Values)
         {
-            if (subscriber.TenantId == realtimeEvent.TenantId)
+            if (subscriber.TenantId == realtimeEvent.TenantId
+                && (subscriber.LocationId is null || realtimeEvent.LocationId is null || subscriber.LocationId == realtimeEvent.LocationId))
             {
                 _ = subscriber.Channel.Writer.TryWrite(realtimeEvent);
             }
@@ -94,10 +108,21 @@ public sealed partial class MqttRealtimeSubscriber(
         using IMqttClient client = factory.CreateMqttClient();
         client.ApplicationMessageReceivedAsync += args =>
         {
+            Dictionary<string, string> metadata = args.ApplicationMessage.UserProperties
+                .Where(property => !string.IsNullOrWhiteSpace(property.Name))
+                .GroupBy(property => property.Name, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(group => group.Key, group => Encoding.UTF8.GetString(group.Last().ValueBuffer.Span), StringComparer.OrdinalIgnoreCase);
             string payload = Encoding.UTF8.GetString(args.ApplicationMessage.Payload.ToArray());
-            if (RealtimeEvent.TryCreate(args.ApplicationMessage.Topic, payload, out RealtimeEvent? realtimeEvent))
+            if (RealtimeEvent.TryCreate(args.ApplicationMessage.Topic, payload, metadata, out RealtimeEvent? realtimeEvent))
             {
-                eventHub.Publish(realtimeEvent!);
+                ActivityContext parent = default;
+                _ = ActivityContext.TryParse(realtimeEvent!.TraceParent, realtimeEvent.TraceState, true, out parent);
+                using Activity? activity = PurpleGlassTelemetry.Messaging.StartActivity("mqtt.consume", ActivityKind.Consumer, parent);
+                activity?.SetTag("messaging.system", "mqtt");
+                activity?.SetTag("messaging.message.id", realtimeEvent.MessageId);
+                activity?.SetTag("purpleglass.correlation_id", realtimeEvent.CorrelationId);
+                PurpleGlassTelemetry.MqttReceived.Add(1);
+                eventHub.Publish(realtimeEvent);
             }
             else
             {
@@ -120,6 +145,7 @@ public sealed partial class MqttRealtimeSubscriber(
                 if (!client.IsConnected)
                 {
                     _ = await client.ConnectAsync(options, stoppingToken);
+                    PurpleGlassTelemetry.MqttReconnects.Add(1);
                     var subscription = new MqttClientSubscribeOptionsBuilder()
                         .WithTopicFilter(configuration["Mqtt:Topic"] ?? "pg/local/v1/tenants/+/events/+")
                         .WithTopicFilter(configuration["Mqtt:CallTopic"] ?? "pg/local/v1/tenants/+/calls/+/events/+")

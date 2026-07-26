@@ -4,6 +4,8 @@ using MQTTnet;
 using MQTTnet.Protocol;
 using PurpleGlass.Eventing;
 using PurpleGlass.Eventing.Infrastructure;
+using PurpleGlass.Observability;
+using System.Diagnostics;
 
 namespace PurpleGlass.Integrations.Worker;
 
@@ -35,6 +37,7 @@ public sealed partial class Worker(
                 if (!client.IsConnected)
                 {
                     _ = await client.ConnectAsync(options, stoppingToken);
+                    PurpleGlassTelemetry.MqttReconnects.Add(1);
                 }
 
                 await PublishBatchAsync(client, stoppingToken);
@@ -65,6 +68,13 @@ public sealed partial class Worker(
 
         foreach (OutboxMessage message in messages)
         {
+            ActivityContext parent = default;
+            _ = ActivityContext.TryParse(message.TraceParent, message.TraceState, true, out parent);
+            using Activity? activity = PurpleGlassTelemetry.Messaging.StartActivity("mqtt.publish", ActivityKind.Producer, parent);
+            activity?.SetTag("messaging.system", "mqtt");
+            activity?.SetTag("messaging.message.id", message.Id);
+            activity?.SetTag("purpleglass.correlation_id", message.CorrelationId);
+            long started = timeProvider.GetTimestamp();
             try
             {
                 var mqttMessage = new MqttApplicationMessageBuilder()
@@ -72,6 +82,11 @@ public sealed partial class Worker(
                     .WithPayload(Encoding.UTF8.GetBytes(message.Payload))
                     .WithQualityOfServiceLevel(MqttQualityOfServiceLevel.AtLeastOnce)
                     .WithRetainFlag(false)
+                    .WithUserProperty("message-id", Encoding.UTF8.GetBytes(message.Id.ToString("D")))
+                    .WithUserProperty("correlation-id", Encoding.UTF8.GetBytes(message.CorrelationId.ToString("D")))
+                    .WithUserProperty("location-id", Encoding.UTF8.GetBytes(message.LocationId.ToString("D")))
+                    .WithUserProperty("traceparent", Encoding.UTF8.GetBytes(activity?.Id ?? message.TraceParent ?? string.Empty))
+                    .WithUserProperty("tracestate", Encoding.UTF8.GetBytes(activity?.TraceStateString ?? message.TraceState ?? string.Empty))
                     .Build();
 
                 _ = await client.PublishAsync(mqttMessage, cancellationToken);
@@ -80,19 +95,24 @@ public sealed partial class Worker(
                     leaseId,
                     timeProvider.GetUtcNow(),
                     cancellationToken);
+                PurpleGlassTelemetry.MqttPublished.Add(1);
+                PurpleGlassTelemetry.OutboxPublishDuration.Record(timeProvider.GetElapsedTime(started).TotalMilliseconds);
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
             {
                 await store.MarkFailedAsync(
                     message,
                     leaseId,
-                    exception.Message,
+                    TelemetrySanitizer.ErrorCode(exception),
                     timeProvider.GetUtcNow(),
                     settings.MaximumAttempts,
                     settings.InitialRetryDelay,
                     settings.MaximumRetryDelay,
                     cancellationToken);
                 LogMessagePublishFailure(logger, message.Id, exception);
+                PurpleGlassTelemetry.MqttPublishFailures.Add(1);
+                PurpleGlassTelemetry.OutboxPublishDuration.Record(timeProvider.GetElapsedTime(started).TotalMilliseconds);
+                activity?.SetStatus(ActivityStatusCode.Error, TelemetrySanitizer.ErrorCode(exception));
                 if (message.Status == OutboxMessage.DeadLetterStatus)
                 {
                     LogMessageDeadLettered(logger, message.Id, message.Attempts);

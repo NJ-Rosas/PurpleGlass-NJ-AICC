@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authorization;
 using PurpleGlass.Application.Abstractions;
 using PurpleGlass.Modules.Identity.Domain;
 using PurpleGlass.Modules.Audit.Application;
+using PurpleGlass.Observability;
 
 namespace PurpleGlass.WebBff;
 
@@ -50,6 +51,7 @@ public sealed class PermissionAuthorizationHandler(
 
         if (accessor is not null && httpContext is not null)
         {
+            PurpleGlassTelemetry.SecurityAuthorizationDenied.Add(1, new KeyValuePair<string, object?>("permission", requirement.Permission));
             RequestContext request = accessor.Current;
             await audit.WriteAsync(request.TenantId, request.LocationId, request.ActorId,
                 "AccessDenied", "BffRoute", httpContext.Request.Path,

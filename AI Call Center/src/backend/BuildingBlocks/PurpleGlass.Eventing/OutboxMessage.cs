@@ -1,3 +1,5 @@
+using System.Diagnostics;
+
 namespace PurpleGlass.Eventing;
 
 public sealed class OutboxMessage
@@ -23,6 +25,8 @@ public sealed class OutboxMessage
         int schemaVersion,
         Guid? causationId,
         string? traceId,
+        string? traceParent,
+        string? traceState,
         string producer,
         string dataClassification)
     {
@@ -37,6 +41,8 @@ public sealed class OutboxMessage
         SchemaVersion = schemaVersion;
         CausationId = causationId;
         TraceId = traceId;
+        TraceParent = traceParent;
+        TraceState = traceState;
         Producer = producer;
         DataClassification = dataClassification;
         Status = PendingStatus;
@@ -64,6 +70,8 @@ public sealed class OutboxMessage
     public Guid? CausationId { get; private set; }
 
     public string? TraceId { get; private set; }
+    public string? TraceParent { get; private set; }
+    public string? TraceState { get; private set; }
 
     public string Producer { get; private set; } = string.Empty;
 
@@ -97,8 +105,15 @@ public sealed class OutboxMessage
         Guid? causationId = null,
         string? traceId = null,
         string producer = "purpleglass-platform",
-        string dataClassification = "internal") =>
-        new(
+        string dataClassification = "internal",
+        string? traceParent = null,
+        string? traceState = null)
+    {
+        Activity? current = Activity.Current;
+        traceId ??= current?.TraceId.ToHexString();
+        traceParent ??= current?.Id;
+        traceState ??= current?.TraceStateString;
+        return new(
             Guid.NewGuid(),
             tenantId,
             locationId,
@@ -110,8 +125,11 @@ public sealed class OutboxMessage
             schemaVersion,
             causationId,
             traceId,
+            traceParent,
+            traceState,
             producer,
             dataClassification);
+    }
 
     public void Claim(Guid leaseId, DateTimeOffset leaseExpiresAtUtc)
     {

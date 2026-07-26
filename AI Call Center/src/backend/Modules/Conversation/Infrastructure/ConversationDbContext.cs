@@ -98,6 +98,8 @@ public sealed class ConversationDbContext(DbContextOptions<ConversationDbContext
         outbox.Property(entity => entity.DataClassification).HasMaxLength(50).IsRequired();
         outbox.Property(entity => entity.Status).HasMaxLength(30).IsRequired();
         outbox.Property(entity => entity.TraceId).HasMaxLength(100);
+        outbox.Property(entity => entity.TraceParent).HasMaxLength(100);
+        outbox.Property(entity => entity.TraceState).HasMaxLength(512);
         outbox.Property(entity => entity.LastError).HasMaxLength(1_000);
     }
 }

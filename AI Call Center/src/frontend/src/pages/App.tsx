@@ -11,6 +11,7 @@ import {
   useUpdateLocationNameMutation,
 } from '../services/prototypeApi'
 import { store } from '../app/store'
+import { reportOperationalFailure } from '../services/operationalDiagnostics'
 
 export function App() {
   const { data: session, isLoading: sessionLoading, isError: sessionError, refetch: refetchSession } = useGetSessionQuery()
@@ -35,7 +36,10 @@ export function App() {
     if (!session) return
     const events = new EventSource('/bff/v1/events')
     events.onopen = () => setRealtime('live')
-    events.onerror = () => setRealtime('offline')
+    events.onerror = () => {
+      setRealtime('offline')
+      reportOperationalFailure('realtime.connection_failed')
+    }
     events.addEventListener('location-display-name-changed', () => {
       store.dispatch(prototypeApi.util.invalidateTags(['TenantSummary']))
     })

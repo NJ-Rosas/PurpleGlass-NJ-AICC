@@ -78,8 +78,9 @@ public sealed class TrustedRequestContextMiddleware(RequestDelegate next)
         IdentityAuthorizationService authorization,
         TrustedRequestContextAccessor accessor)
     {
-        Guid correlationId = Guid.TryParse(httpContext.Request.Headers["X-Correlation-Id"], out Guid supplied)
-            ? supplied : Guid.NewGuid();
+        Guid correlationId = PurpleGlass.Observability.CorrelationIds.PreserveOrCreate(
+            Guid.TryParse(httpContext.Request.Headers["X-Correlation-Id"], out Guid supplied) ? supplied : null);
+        System.Diagnostics.Activity.Current?.SetTag("purpleglass.correlation_id", correlationId);
         httpContext.Response.Headers["X-Correlation-Id"] = correlationId.ToString("D");
 
         if (httpContext.User.Identity?.IsAuthenticated == true)

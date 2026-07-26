@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
 using Npgsql;
 using PurpleGlass.Eventing;
+using PurpleGlass.Observability;
 
 namespace PurpleGlass.Eventing.Infrastructure;
 
@@ -14,6 +15,9 @@ public sealed class InboxDeduplicationStore(EventingDbContext dbContext, TimePro
         Func<CancellationToken, Task> handler,
         CancellationToken cancellationToken)
     {
+        using var activity = PurpleGlassTelemetry.Eventing.StartActivity("inbox.process", System.Diagnostics.ActivityKind.Consumer);
+        activity?.SetTag("messaging.message.id", messageId);
+        activity?.SetTag("messaging.consumer.name", consumerName);
         string normalizedConsumer = consumerName.Trim();
         if (normalizedConsumer.Length is < 1 or > 150)
         {
@@ -40,6 +44,8 @@ public sealed class InboxDeduplicationStore(EventingDbContext dbContext, TimePro
         {
             await transaction.RollbackAsync(cancellationToken);
             dbContext.Entry(receipt).State = EntityState.Detached;
+            PurpleGlassTelemetry.InboxDuplicates.Add(1);
+            activity?.SetTag("purpleglass.inbox.duplicate", true);
             return false;
         }
 
@@ -47,6 +53,7 @@ public sealed class InboxDeduplicationStore(EventingDbContext dbContext, TimePro
         receipt.MarkProcessed(timeProvider.GetUtcNow());
         _ = await dbContext.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
+        PurpleGlassTelemetry.InboxProcessed.Add(1);
         return true;
     }
 }

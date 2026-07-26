@@ -5,6 +5,7 @@ import { sessionReducer } from './sessionSlice'
 export const store = configureStore({
   reducer: { session: sessionReducer, [prototypeApi.reducerPath]: prototypeApi.reducer },
   middleware: (getDefaultMiddleware) => getDefaultMiddleware().concat(prototypeApi.middleware),
+  devTools: import.meta.env.DEV,
 })
 
 export type RootState = ReturnType<typeof store.getState>
