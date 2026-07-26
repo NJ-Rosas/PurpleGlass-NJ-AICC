@@ -12,6 +12,9 @@ public sealed class TwilioRealtimeAudioTransport : IRealtimeAudioTransport
     private readonly TwilioRealtimeAudioOptions options;
     private readonly TimeProvider timeProvider;
     private readonly SemaphoreSlim writeLock = new(1, 1);
+    private MemoryStream? pendingPcm;
+    private AudioFormat? pendingFormat;
+    private long nextChunkSequence = 1;
     private long markSequence;
     private int receiveStarted;
     private int completed;
@@ -61,21 +64,31 @@ public sealed class TwilioRealtimeAudioTransport : IRealtimeAudioTransport
         ThrowIfUnavailable();
         ValidatePcmChunk(chunk);
 
-        byte[] pcm = chunk.Format.SampleRateHz == TwilioRealtimeAudioProtocol.TelephonySampleRate
-            ? chunk.Audio.ToArray()
-            : TwilioMuLawCodec.ResamplePcm16Mono(
-                chunk.Audio.Span,
-                chunk.Format.SampleRateHz,
-                TwilioRealtimeAudioProtocol.TelephonySampleRate);
-        if (pcm.Length > options.MaxPcmChunkBytes)
-            throw new TwilioRealtimeAudioException(
-                "provider_media_pcm_too_large", "PCM audio exceeded its size limit after conversion.");
-        byte[] encoded = TwilioMuLawCodec.EncodePcm16(pcm);
-
         await writeLock.WaitAsync(cancellationToken);
+        byte[] pcm = [];
+        byte[] encoded = [];
         try
         {
             ThrowIfUnavailable();
+            AppendChunkLocked(chunk);
+            if (!chunk.IsFinal) return;
+
+            byte[] responsePcm = TakePendingPcmLocked();
+            try
+            {
+                pcm = chunk.Format.SampleRateHz == TwilioRealtimeAudioProtocol.TelephonySampleRate
+                    ? responsePcm.ToArray()
+                    : TwilioMuLawCodec.ResamplePcm16Mono(
+                        responsePcm,
+                        chunk.Format.SampleRateHz,
+                        TwilioRealtimeAudioProtocol.TelephonySampleRate);
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(responsePcm);
+            }
+            encoded = TwilioMuLawCodec.EncodePcm16(pcm);
+
             for (int offset = 0; offset < encoded.Length; offset += options.MaxOutboundMediaBytes)
             {
                 int length = Math.Min(options.MaxOutboundMediaBytes, encoded.Length - offset);
@@ -114,6 +127,7 @@ public sealed class TwilioRealtimeAudioTransport : IRealtimeAudioTransport
         try
         {
             ThrowIfUnavailable();
+            ResetPendingPcmLocked();
             await SendWireMessageLockedAsync(new
             {
                 @event = "clear",
@@ -143,6 +157,7 @@ public sealed class TwilioRealtimeAudioTransport : IRealtimeAudioTransport
         }
         finally
         {
+            ResetPendingPcmLocked();
             writeLock.Release();
         }
     }
@@ -297,6 +312,59 @@ public sealed class TwilioRealtimeAudioTransport : IRealtimeAudioTransport
         if (chunk.Audio.Length > options.MaxPcmChunkBytes)
             throw new TwilioRealtimeAudioException(
                 "provider_media_pcm_too_large", "PCM audio exceeded its size limit.");
+    }
+
+    private void AppendChunkLocked(SynthesizedAudioChunk chunk)
+    {
+        if (chunk.Sequence != nextChunkSequence)
+        {
+            ResetPendingPcmLocked();
+            throw new TwilioRealtimeAudioException(
+                "provider_media_sequence_invalid", "Synthesized audio chunks were out of sequence.");
+        }
+
+        if (pendingFormat is null)
+        {
+            pendingFormat = chunk.Format;
+            pendingPcm = new MemoryStream(Math.Min(options.MaxPcmResponseBytes, 16 * 1024));
+        }
+        else if (pendingFormat != chunk.Format)
+        {
+            ResetPendingPcmLocked();
+            throw new TwilioRealtimeAudioException(
+                "provider_media_pcm_unsupported", "Synthesized audio format changed within a response.");
+        }
+
+        if (pendingPcm!.Length + chunk.Audio.Length > options.MaxPcmResponseBytes)
+        {
+            ResetPendingPcmLocked();
+            throw new TwilioRealtimeAudioException(
+                "provider_media_pcm_too_large", "PCM audio response exceeded its size limit.");
+        }
+
+        pendingPcm.Write(chunk.Audio.Span);
+        nextChunkSequence++;
+    }
+
+    private byte[] TakePendingPcmLocked()
+    {
+        byte[] response = pendingPcm?.ToArray() ?? [];
+        ResetPendingPcmLocked();
+        return response;
+    }
+
+    private void ResetPendingPcmLocked()
+    {
+        if (pendingPcm is not null)
+        {
+            if (pendingPcm.TryGetBuffer(out ArraySegment<byte> buffer))
+                CryptographicOperations.ZeroMemory(buffer.AsSpan());
+            pendingPcm.Dispose();
+        }
+
+        pendingPcm = null;
+        pendingFormat = null;
+        nextChunkSequence = 1;
     }
 
     private void ThrowIfUnavailable()

@@ -90,9 +90,19 @@ Set the Twilio number's incoming Voice webhook to the inbound URL only when inbo
 
 ### Task 10 live evidence and remaining validation
 
-A controlled synthetic Task 10 call has already proven this path in the Render environment: outbound submission to Twilio, phone answer, signed answer/status callbacks, bidirectional Media Stream establishment, realtime conversation creation, OpenAI TTS, an audible initial greeting, inbound caller audio, OpenAI STT returning successfully, and the recognized caller turn appearing in the persisted call review and realtime-connected dashboard. Do not repeat those provider transactions merely to reconfirm an earlier checkpoint.
+A controlled synthetic Task 10 call has proven the complete multi-turn path in the Render environment: outbound submission to Twilio, phone answer, signed answer/status callbacks, bidirectional Media Stream establishment, an audible OpenAI TTS greeting, inbound caller audio, successful OpenAI STT, multiple persisted caller and fake-agent turns, repeated TTS playback, realtime dashboard updates, 11 finalized transcript turns, normal human hangup, and completed durable call and conversation state. The fresh-scope persistence fix remained stable with no recurrence of the earlier EF transaction/cancellation failure. Do not repeat those provider transactions merely to reconfirm an earlier checkpoint.
 
-The remaining one-call validation is the multi-turn boundary: after the greeting, verify a caller turn is persisted, the fake language model produces an agent response, the response is persisted and synthesized, a second caller/agent turn succeeds, normal hangup completes both the call and conversation, and the completed durable state survives refresh. The realtime implementation uses a fresh short database scope for each mutation; it does not retain a `DbContext` or transaction across speech duration, OpenAI calls, WebSocket I/O, or TTS playback.
+That call also exposed an intermittent word-tail hiss. Deterministic analysis traced it to unfiltered 24 kHz to 8 kHz decimation: high-frequency energy in some synthesized fricatives folded into the audible telephone band. The corrected path applies one response-contiguous, windowed-sinc low-pass resampling operation, so source chunk boundaries do not reset filter state. It does not trim words, add fades, or append synthetic silence. The realtime implementation continues to use a fresh short database scope for each mutation; it does not retain a `DbContext` or transaction across speech duration, OpenAI calls, WebSocket I/O, or TTS playback.
+
+The exact production outbound pipeline is:
+
+1. OpenAI `gpt-4o-mini-tts` returns requested raw `pcm`: signed 16-bit little-endian, 24 kHz, mono, with no container header.
+2. PurpleGlass retains only each chunk's valid bytes and assembles one bounded PCM buffer per synthesized response.
+3. A windowed-sinc band-limited converter low-pass filters and resamples the contiguous response to signed 16-bit PCM at 8 kHz, mono. Boundary coefficients are normalized; the final partial sample count is rounded from the real source length without capacity padding.
+4. The standard G.711 μ-law encoder converts every valid 8 kHz sample. The resulting raw `audio/x-mulaw` bytes are split at the configured outbound media bound (8 KiB by default), Base64-encoded from the exact offset and length, and sent in serialized WebSocket text `media` messages.
+5. A response-specific `mark` follows its media. Barge-in sends Twilio `clear` under the same per-call write lock and resets any locally buffered partial response before a later response can start.
+
+Transport-quality symptoms include hiss following fricatives, clicks at regular source-chunk intervals, delayed audio from an interrupted response, or a malformed/absent greeting while the call remains connected. Diagnose these with the deterministic audio tests and safe call/state correlation first. Never log audio or Base64 payloads. The implementation has no pooled outbound audio buffers; response, resampled, encoded, and serialized buffers use their written lengths and are cleared after use.
 
 For an existing Blueprint, use this exact workflow:
 
@@ -104,7 +114,10 @@ For an existing Blueprint, use this exact workflow:
 6. Wake both free services through their `/health/live` endpoints.
 7. Require BFF `/health/live` to return HTTP 200.
 8. Require BFF `/health/ready` to return HTTP 200 with healthy PostgreSQL and telephony/voice checks.
-9. Sign in again if the BFF restarted and its ephemeral Data Protection keys invalidated the old development session, then perform the single Task 10 call to the verified trial recipient.
+9. Sign in again if the BFF restarted and its ephemeral Data Protection keys invalidated the old development session.
+10. Make one controlled call to the verified trial recipient, hear the initial greeting, and complete several conversational turns.
+11. Listen specifically for word-tail hiss, clicks, or static; if appropriate, make one natural interruption and confirm stale speech stops.
+12. Hang up normally, then confirm completed call/conversation state and the durable transcript after refresh.
 
 Do not place the call when Blueprint sync is pending, a required secret is missing, or readiness is not HTTP 200.
 

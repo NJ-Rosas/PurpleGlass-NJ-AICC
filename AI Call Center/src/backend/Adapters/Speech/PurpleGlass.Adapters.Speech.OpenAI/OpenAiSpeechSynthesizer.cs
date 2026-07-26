@@ -93,7 +93,7 @@ public sealed class OpenAiSpeechSynthesizer : ISpeechSynthesizer
                 response.Content,
                 options.MaximumSpeechResponseBytes,
                 cancellationToken);
-            if (audio.Length == 0 || audio.Length % 2 != 0)
+            if (audio.Length == 0 || audio.Length % 2 != 0 || HasContainerHeader(audio))
             {
                 return Failure(voice,
                     new RuntimeFailure("speech_synthesis_response_invalid", "Speech synthesis returned invalid audio.", false));
@@ -163,6 +163,12 @@ public sealed class OpenAiSpeechSynthesizer : ISpeechSynthesizer
 
         return chunks;
     }
+
+    private static bool HasContainerHeader(ReadOnlySpan<byte> audio) =>
+        audio.StartsWith("RIFF"u8)
+        || audio.StartsWith("ID3"u8)
+        || audio.StartsWith("OggS"u8)
+        || audio.StartsWith("fLaC"u8);
 
     private static string? NormalizeLanguage(string value)
     {

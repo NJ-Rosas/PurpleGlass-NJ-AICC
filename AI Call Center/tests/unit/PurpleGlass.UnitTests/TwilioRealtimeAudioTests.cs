@@ -93,13 +93,146 @@ public sealed class TwilioRealtimeAudioTests
         await transport.SendAsync(new SynthesizedAudioChunk(
             1,
             AudioFormat.Pcm16(16_000),
-            pcm16Khz), default);
+            pcm16Khz,
+            IsFinal: true), default);
 
-        using JsonDocument media = JsonDocument.Parse(Assert.Single(socket.SentTextMessages));
+        Assert.Equal(2, socket.SentTextMessages.Count);
+        using JsonDocument media = JsonDocument.Parse(socket.SentTextMessages[0]);
         byte[] encoded = Convert.FromBase64String(
             media.RootElement.GetProperty("media").GetProperty("payload").GetString()!);
         Assert.Equal(2, encoded.Length);
         Assert.All(encoded, value => Assert.Equal(0xff, value));
+        await transport.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task DownsamplingAttenuatesEnergyAboveTelephoneNyquistWithoutMutingSpeechBand()
+    {
+        byte[] speechBand = SinePcm(24_000, 1_000, 0.25, 12_000);
+        byte[] aboveNyquist = SinePcm(24_000, 6_000, 0.25, 12_000);
+
+        byte[] speechBandMuLaw = await SendAndCollectMuLawAsync(speechBand, 24_000, speechBand.Length);
+        byte[] aboveNyquistMuLaw = await SendAndCollectMuLawAsync(aboveNyquist, 24_000, aboveNyquist.Length);
+        byte[] speechBandPcm = await DecodeMuLawAsync(speechBandMuLaw);
+        byte[] aboveNyquistPcm = await DecodeMuLawAsync(aboveNyquistMuLaw);
+
+        double speechBandRms = Rms(speechBandPcm, edgeSamplesToIgnore: 40);
+        double aboveNyquistRms = Rms(aboveNyquistPcm, edgeSamplesToIgnore: 40);
+        Assert.True(speechBandRms > 7_000, $"Speech-band RMS was unexpectedly low: {speechBandRms}.");
+        Assert.True(aboveNyquistRms < speechBandRms * 0.05,
+            $"Aliased RMS {aboveNyquistRms} was not sufficiently below speech-band RMS {speechBandRms}.");
+    }
+
+    [Theory]
+    [InlineData(4_798)]
+    [InlineData(4_800)]
+    [InlineData(4_802)]
+    public async Task SplitChunksProduceExactlyTheSameAudioAsOneContiguousResponse(int firstChunkLength)
+    {
+        byte[] source = WordLikePcm();
+        byte[] contiguous = await SendAndCollectMuLawAsync(source, 24_000, source.Length);
+        byte[] split = await SendAndCollectMuLawAsync(
+            source, 24_000, firstChunkLength, 4_800, source.Length - firstChunkLength - 4_800);
+
+        Assert.Equal(contiguous, split);
+    }
+
+    [Fact]
+    public async Task FinalPartialChunkUsesOnlyValidSamplesAndAddsNoPadding()
+    {
+        byte[] source = SinePcm(24_000, 900, 0.10004, 8_000);
+
+        byte[] encoded = await SendAndCollectMuLawAsync(source, 24_000, 4_800, source.Length - 4_800);
+
+        int sourceSamples = source.Length / sizeof(short);
+        int expectedSamples = (int)Math.Round(sourceSamples / 3d, MidpointRounding.AwayFromZero);
+        Assert.Equal(expectedSamples, encoded.Length);
+    }
+
+    [Fact]
+    public async Task MuLawEncodingMatchesKnownPcmVectors()
+    {
+        short[] samples = [0, 1, -1, 32_124, -32_124];
+        var pcm = new byte[samples.Length * sizeof(short)];
+        for (int index = 0; index < samples.Length; index++)
+            BinaryPrimitives.WriteInt16LittleEndian(pcm.AsSpan(index * sizeof(short)), samples[index]);
+
+        byte[] encoded = await SendAndCollectMuLawAsync(pcm, 8_000, pcm.Length);
+
+        Assert.Equal(new byte[] { 0xff, 0xff, 0x7f, 0x80, 0x00 }, encoded);
+    }
+
+    [Fact]
+    public async Task ClearDropsAnIncompleteResponseBeforeTheNextResponse()
+    {
+        var socket = InitializedSocket();
+        TwilioRealtimeAudioTransport transport = await InitializeAsync(socket);
+        await transport.SendAsync(new SynthesizedAudioChunk(
+            1, AudioFormat.Pcm16(24_000), SinePcm(24_000, 1_000, 0.1, 10_000)), default);
+
+        await transport.ClearPlaybackAsync(default);
+        await transport.SendAsync(new SynthesizedAudioChunk(
+            1, AudioFormat.Pcm16(24_000), new byte[4_800], IsFinal: true), default);
+
+        Assert.Equal(3, socket.SentTextMessages.Count);
+        using JsonDocument clear = JsonDocument.Parse(socket.SentTextMessages[0]);
+        Assert.Equal("clear", clear.RootElement.GetProperty("event").GetString());
+        using JsonDocument media = JsonDocument.Parse(socket.SentTextMessages[1]);
+        byte[] encoded = Convert.FromBase64String(
+            media.RootElement.GetProperty("media").GetProperty("payload").GetString()!);
+        Assert.Equal(800, encoded.Length);
+        Assert.All(encoded, value => Assert.Equal(0xff, value));
+        await transport.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task CancellationBetweenChunksCannotLeakIntoTheNextResponse()
+    {
+        var socket = InitializedSocket();
+        TwilioRealtimeAudioTransport transport = await InitializeAsync(socket);
+        await transport.SendAsync(new SynthesizedAudioChunk(
+            1, AudioFormat.Pcm16(24_000), SinePcm(24_000, 1_000, 0.1, 10_000)), default);
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+            await transport.SendAsync(new SynthesizedAudioChunk(
+                2, AudioFormat.Pcm16(24_000), new byte[4_800], IsFinal: true), cancellation.Token));
+        await transport.ClearPlaybackAsync(default);
+        await transport.SendAsync(new SynthesizedAudioChunk(
+            1, AudioFormat.Pcm16(8_000), new byte[320], IsFinal: true), default);
+
+        Assert.Equal(3, socket.SentTextMessages.Count);
+        using JsonDocument media = JsonDocument.Parse(socket.SentTextMessages[1]);
+        byte[] encoded = Convert.FromBase64String(
+            media.RootElement.GetProperty("media").GetProperty("payload").GetString()!);
+        Assert.Equal(160, encoded.Length);
+        Assert.All(encoded, value => Assert.Equal(0xff, value));
+        await transport.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task MultipleResponsesUseIndependentAudioAndMarks()
+    {
+        var socket = InitializedSocket();
+        TwilioRealtimeAudioTransport transport = await InitializeAsync(socket);
+
+        await transport.SendAsync(new SynthesizedAudioChunk(
+            1, AudioFormat.Pcm16(8_000), new byte[320], IsFinal: true), default);
+        await transport.SendAsync(new SynthesizedAudioChunk(
+            1, AudioFormat.Pcm16(8_000), new byte[640], IsFinal: true), default);
+
+        Assert.Equal(4, socket.SentTextMessages.Count);
+        using JsonDocument firstMedia = JsonDocument.Parse(socket.SentTextMessages[0]);
+        using JsonDocument firstMark = JsonDocument.Parse(socket.SentTextMessages[1]);
+        using JsonDocument secondMedia = JsonDocument.Parse(socket.SentTextMessages[2]);
+        using JsonDocument secondMark = JsonDocument.Parse(socket.SentTextMessages[3]);
+        Assert.Equal(160, Convert.FromBase64String(
+            firstMedia.RootElement.GetProperty("media").GetProperty("payload").GetString()!).Length);
+        Assert.Equal("response-1", firstMark.RootElement.GetProperty("mark").GetProperty("name").GetString());
+        Assert.Equal(320, Convert.FromBase64String(
+            secondMedia.RootElement.GetProperty("media").GetProperty("payload").GetString()!).Length);
+        Assert.Equal("response-2", secondMark.RootElement.GetProperty("mark").GetProperty("name").GetString());
         await transport.DisposeAsync();
     }
 
@@ -178,6 +311,92 @@ public sealed class TwilioRealtimeAudioTests
             expectedAccountSid,
             options ?? new TwilioRealtimeAudioOptions(),
             default);
+
+    private static async Task<byte[]> SendAndCollectMuLawAsync(
+        byte[] pcm,
+        int sampleRate,
+        params int[] chunkLengths)
+    {
+        Assert.Equal(pcm.Length, chunkLengths.Sum());
+        var socket = InitializedSocket();
+        TwilioRealtimeAudioTransport transport = await InitializeAsync(socket);
+        int offset = 0;
+        for (int index = 0; index < chunkLengths.Length; index++)
+        {
+            int length = chunkLengths[index];
+            await transport.SendAsync(new SynthesizedAudioChunk(
+                index + 1,
+                AudioFormat.Pcm16(sampleRate),
+                pcm.AsMemory(offset, length),
+                IsFinal: index == chunkLengths.Length - 1), default);
+            offset += length;
+        }
+
+        var encoded = new List<byte>();
+        foreach (string message in socket.SentTextMessages)
+        {
+            using JsonDocument json = JsonDocument.Parse(message);
+            if (json.RootElement.GetProperty("event").GetString() != "media") continue;
+            encoded.AddRange(Convert.FromBase64String(
+                json.RootElement.GetProperty("media").GetProperty("payload").GetString()!));
+        }
+
+        await transport.DisposeAsync();
+        return encoded.ToArray();
+    }
+
+    private static async Task<byte[]> DecodeMuLawAsync(byte[] encoded)
+    {
+        var socket = InitializedSocket();
+        socket.EnqueueJson(MediaMessage(2, 1, Convert.ToBase64String(encoded)));
+        socket.EnqueueJson(StopMessage(3));
+        TwilioRealtimeAudioTransport transport = await InitializeAsync(socket);
+        var decoded = new List<byte>();
+        await foreach (RealtimeAudioFrame frame in transport.ReceiveAsync(default))
+            decoded.AddRange(frame.Audio.ToArray());
+        await transport.DisposeAsync();
+        return decoded.ToArray();
+    }
+
+    private static byte[] SinePcm(int sampleRate, double frequency, double seconds, double amplitude)
+    {
+        int samples = (int)Math.Round(sampleRate * seconds, MidpointRounding.AwayFromZero);
+        var pcm = new byte[samples * sizeof(short)];
+        for (int index = 0; index < samples; index++)
+        {
+            short sample = (short)Math.Round(
+                amplitude * Math.Sin(2 * Math.PI * frequency * index / sampleRate),
+                MidpointRounding.AwayFromZero);
+            BinaryPrimitives.WriteInt16LittleEndian(pcm.AsSpan(index * sizeof(short)), sample);
+        }
+        return pcm;
+    }
+
+    private static byte[] WordLikePcm()
+    {
+        var pcm = new byte[14_400];
+        byte[] firstBurst = SinePcm(24_000, 900, 0.08, 10_000);
+        byte[] fricativeBurst = SinePcm(24_000, 6_000, 0.04, 6_000);
+        firstBurst.CopyTo(pcm, 960);
+        fricativeBurst.CopyTo(pcm, 7_200);
+        BinaryPrimitives.WriteInt16LittleEndian(pcm.AsSpan(12_000), 12_000);
+        BinaryPrimitives.WriteInt16LittleEndian(pcm.AsSpan(12_002), -12_000);
+        return pcm;
+    }
+
+    private static double Rms(byte[] pcm, int edgeSamplesToIgnore)
+    {
+        int sampleCount = pcm.Length / sizeof(short);
+        double sumSquares = 0;
+        int measured = 0;
+        for (int index = edgeSamplesToIgnore; index < sampleCount - edgeSamplesToIgnore; index++)
+        {
+            short sample = BinaryPrimitives.ReadInt16LittleEndian(pcm.AsSpan(index * sizeof(short)));
+            sumSquares += (double)sample * sample;
+            measured++;
+        }
+        return Math.Sqrt(sumSquares / measured);
+    }
 
     private static object ConnectedMessage() => new
     {

@@ -39,16 +39,35 @@ internal static class TwilioMuLawCodec
             MidpointRounding.AwayFromZero)));
         var destination = new byte[checked(targetSamples * sizeof(short))];
         double sourceStep = sourceRateHz / (double)targetRateHz;
+        double cutoff = 0.45 * Math.Min(1d, targetRateHz / (double)sourceRateHz);
+        const int kernelRadius = 16;
 
         for (int index = 0; index < targetSamples; index++)
         {
             double sourcePosition = index * sourceStep;
-            int leftIndex = Math.Min((int)sourcePosition, sourceSamples - 1);
-            int rightIndex = Math.Min(leftIndex + 1, sourceSamples - 1);
-            double fraction = sourcePosition - leftIndex;
-            short left = BinaryPrimitives.ReadInt16LittleEndian(source[(leftIndex * sizeof(short))..]);
-            short right = BinaryPrimitives.ReadInt16LittleEndian(source[(rightIndex * sizeof(short))..]);
-            int interpolated = (int)Math.Round(left + ((right - left) * fraction), MidpointRounding.AwayFromZero);
+            int firstSample = Math.Max(0, (int)Math.Floor(sourcePosition) - kernelRadius);
+            int lastSample = Math.Min(sourceSamples - 1, (int)Math.Ceiling(sourcePosition) + kernelRadius);
+            double weightedSamples = 0;
+            double totalWeight = 0;
+
+            for (int sourceIndex = firstSample; sourceIndex <= lastSample; sourceIndex++)
+            {
+                double distance = sourceIndex - sourcePosition;
+                if (Math.Abs(distance) > kernelRadius) continue;
+                double sincArgument = 2 * cutoff * distance;
+                double sinc = sincArgument == 0
+                    ? 1
+                    : Math.Sin(Math.PI * sincArgument) / (Math.PI * sincArgument);
+                double window = 0.54 + (0.46 * Math.Cos(Math.PI * distance / kernelRadius));
+                double weight = 2 * cutoff * sinc * window;
+                short sample = BinaryPrimitives.ReadInt16LittleEndian(source[(sourceIndex * sizeof(short))..]);
+                weightedSamples += sample * weight;
+                totalWeight += weight;
+            }
+
+            int interpolated = totalWeight == 0
+                ? 0
+                : (int)Math.Round(weightedSamples / totalWeight, MidpointRounding.AwayFromZero);
             BinaryPrimitives.WriteInt16LittleEndian(
                 destination.AsSpan(index * sizeof(short)),
                 (short)Math.Clamp(interpolated, short.MinValue, short.MaxValue));

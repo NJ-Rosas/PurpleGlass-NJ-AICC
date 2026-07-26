@@ -14,6 +14,8 @@ public sealed class TwilioRealtimeAudioOptions
 
     public int MaxPcmChunkBytes { get; init; } = 512 * 1024;
 
+    public int MaxPcmResponseBytes { get; init; } = 16 * 1024 * 1024;
+
     public int MaxOutboundMediaBytes { get; init; } = 8 * 1024;
 
     public TwilioRealtimeAudioOptions Validate()
@@ -30,6 +32,8 @@ public sealed class TwilioRealtimeAudioOptions
             throw new InvalidOperationException("Twilio decoded media has an invalid bound.");
         if (MaxPcmChunkBytes is < 320 or > 4 * 1024 * 1024)
             throw new InvalidOperationException("Twilio PCM chunks have an invalid bound.");
+        if (MaxPcmResponseBytes < MaxPcmChunkBytes || MaxPcmResponseBytes > 64 * 1024 * 1024)
+            throw new InvalidOperationException("Twilio PCM responses have an invalid bound.");
         if (MaxOutboundMediaBytes < 80 || MaxOutboundMediaBytes > MaxDecodedMediaBytes)
             throw new InvalidOperationException("Twilio outbound media has an invalid bound.");
 

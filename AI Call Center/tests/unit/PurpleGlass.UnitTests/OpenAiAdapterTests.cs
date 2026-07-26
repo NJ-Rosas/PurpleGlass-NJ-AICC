@@ -354,6 +354,28 @@ public sealed class OpenAiAdapterTests
     }
 
     [Theory]
+    [InlineData("RIFF")]
+    [InlineData("ID3\0")]
+    [InlineData("OggS")]
+    [InlineData("fLaC")]
+    public async Task SynthesisRejectsContainerDataWhenRawPcmWasRequested(string signature)
+    {
+        byte[] responseBody = new byte[32];
+        Encoding.ASCII.GetBytes(signature).CopyTo(responseBody, 0);
+        using var httpClient = new HttpClient(new RecordingHttpMessageHandler((_, _) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new ByteArrayContent(responseBody),
+            })));
+        var synthesizer = new OpenAiSpeechSynthesizer(httpClient, SpeechOptions());
+
+        SpeechSynthesisResult result = await synthesizer.SynthesizeAsync(SynthesisRequest(), default);
+
+        Assert.Equal("speech_synthesis_response_invalid", result.Failure?.Code);
+        Assert.Null(result.AudioChunks);
+    }
+
+    [Theory]
     [InlineData(HttpStatusCode.TooManyRequests, "speech_synthesis_rate_limited", true)]
     [InlineData(HttpStatusCode.BadRequest, "speech_synthesis_rejected", false)]
     public async Task SynthesisMapsHttpFailuresWithoutLeakingProviderBody(
