@@ -10,6 +10,8 @@ services:
     autoDeployTrigger: checksPass
     numInstances: 1
     envVars:
+      - key: AllowedHosts
+        value: localhost;127.0.0.1;purpleglass-web.onrender.com
       - key: ASPNETCORE_ENVIRONMENT
         value: Development
       - key: ConnectionStrings__Postgres

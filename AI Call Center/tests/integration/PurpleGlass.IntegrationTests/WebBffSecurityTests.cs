@@ -109,6 +109,18 @@ public sealed class WebBffSecurityTests : IClassFixture<SecurityWebApplicationFa
     }
 
     [Fact]
+    public async Task RenderHostCanReachLivenessEndpoint()
+    {
+        using HttpClient client = factory.CreateClient();
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/health/live");
+        request.Headers.Host = "purpleglass-web.onrender.com";
+        request.Headers.Add("X-Forwarded-Proto", "https");
+        request.Headers.Add("X-Forwarded-Host", "purpleglass-web.onrender.com");
+
+        Assert.Equal(HttpStatusCode.OK, (await client.SendAsync(request)).StatusCode);
+    }
+
+    [Fact]
     public async Task ReadOnlyUserCannotInitiateOutboundCall()
     {
         using HttpClient client = factory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true });
@@ -310,6 +322,7 @@ public sealed class SecurityWebApplicationFactory : WebApplicationFactory<WebBff
                 ["Security:AllowDevelopmentAuthentication"] = "true",
                 ["Security:AllowSyntheticDataOnly"] = "true",
                 ["Security:RequireHttps"] = "false",
+                ["AllowedHosts"] = "localhost;127.0.0.1;purpleglass-web.onrender.com",
             }));
         if (includeUnhealthyReadinessCheck)
         {
