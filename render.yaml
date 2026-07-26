@@ -54,7 +54,6 @@ services:
     dockerContext: ./AI Call Center
     dockerfilePath: ./AI Call Center/deploy/render/Dockerfile.worker
     healthCheckPath: /health/live
-    maxShutdownDelaySeconds: 60
     autoDeployTrigger: checksPass
     numInstances: 1
     envVars:
