@@ -491,8 +491,11 @@ try {
     if (-not $frontendAlreadyRunning) {
         $ownedProcesses = @($ownedProcesses | Where-Object { $_.Component -ne 'Frontend' })
         Write-Status 'Opening the frontend log window...'
-        $npmEscaped = $npm.Replace("'", "''")
-        $frontendCommand = "& '$npmEscaped' run dev -- --host 127.0.0.1"
+        $viteEntryPoint = Join-Path $FrontendRoot 'node_modules\vite\bin\vite.js'
+        Assert-Path $viteEntryPoint 'Vite entry point'
+        $nodeEscaped = $node.Replace("'", "''")
+        $viteEntryPointEscaped = $viteEntryPoint.Replace("'", "''")
+        $frontendCommand = "& '$nodeEscaped' '$viteEntryPointEscaped' --host 127.0.0.1"
         $ownedProcesses += Start-ComponentTerminal 'Frontend' 'PurpleGlass — Frontend' $FrontendRoot $frontendCommand
         Save-LauncherState $ownedProcesses
     }
