@@ -2,6 +2,46 @@
 
 This starts the synthetic, patient-free React-to-backend prototype. Run commands from `AI Call Center`.
 
+## Preferred one-click startup on Windows
+
+Open `Start-PurpleGlass.ps1` at the repository root in VS Code and press the
+PowerShell **Run / Play ▶** button. The script resolves all repository paths
+relative to itself, so the active terminal directory does not matter and paths
+containing spaces are supported.
+
+The launcher:
+
+- checks .NET SDK 10.0.302, Node.js 24+, npm, Docker, and Docker Compose;
+- starts Docker Desktop if it is installed but its daemon is not responding;
+- starts and health-checks PostgreSQL, MQTT, and Valkey without recreating
+  healthy containers unnecessarily;
+- uses `.env` through Docker Compose when present, otherwise uses the committed
+  synthetic development defaults;
+- restores .NET tools and locked backend dependencies;
+- runs `npm ci` only when `src/frontend/node_modules` is missing;
+- applies checked-in migrations through the dedicated migration host;
+- starts the Web BFF, integrations worker, and frontend in three titled,
+  visible log windows;
+- waits for the BFF and frontend to become reachable before opening the browser;
+- reuses repository-owned processes and containers when the launcher is run
+  again, and refuses to kill an unrelated process during a port conflict.
+
+The normal launcher deliberately disables real telephony, AI, speech, Open
+Dental, and sensitive-data modes. No external credentials are required for the
+synthetic local prototype.
+
+Application URLs:
+
+- Frontend: <http://127.0.0.1:5173>
+- Web BFF: <http://127.0.0.1:5101>
+- Readiness: <http://127.0.0.1:5101/health/ready>
+
+Use Ctrl+C in an individual component window to stop that component. To stop
+all application processes owned by the launcher, open `Stop-PurpleGlass.ps1`
+and press Run. Infrastructure remains running for faster restarts. Run
+`Stop-PurpleGlass.ps1 -IncludeInfrastructure` manually when you also want to
+stop the Compose containers; named volumes and developer data are preserved.
+
 ## First-time setup
 
 ```bash
@@ -69,7 +109,7 @@ Failure simulation should end with both durable aggregates in `Failed`. Human or
 
 Known limitations: synthesized audio is an opaque in-memory reference, not human-quality audio; there is no telephone number, streaming audio, object storage, MQTT dispatcher change, browser, or dashboard integration in Task 4.
 
-## Start
+## Manual fallback startup
 
 Open three terminals.
 
@@ -85,6 +125,35 @@ npm run dev --prefix src/frontend -- --host 127.0.0.1
 ```
 
 Open <http://127.0.0.1:5173>. During development, Vite proxies browser `/bff/*` calls to the BFF.
+
+## Launcher troubleshooting
+
+### Docker does not become ready
+
+Open Docker Desktop and review its status. Confirm that `docker info` succeeds,
+then run the launcher again. The launcher polls Docker's daemon rather than
+assuming the desktop process is ready.
+
+### Port conflict
+
+The required application ports are 5101 and 5173. Infrastructure ports are
+derived from the resolved Compose configuration (defaults: 5433, 1883, and
+6379). The launcher reports the owning PID or container and never terminates an
+unknown process. Stop or reconfigure the conflicting application, then rerun
+the launcher.
+
+### Migration failure
+
+Application processes are not started after a migration failure. Check that
+PostgreSQL is healthy, review the migration output in the launcher terminal,
+and run the launcher again. It only applies checked-in migrations; it never
+generates, deletes, or resets migrations or data.
+
+### Component does not become ready
+
+Review the titled component window. Correct the reported configuration or
+build error and rerun the launcher. A second run reuses components that are
+already healthy and starts only those that are absent.
 
 The browser begins unauthenticated. Choose the predefined synthetic administrator or read-only identity. The BFF first issues an HttpOnly antiforgery cookie and returns a request token; React sends that token in `X-CSRF-TOKEN` for login, logout, and mutations. Logout is the avatar button in the left rail. No access token, refresh token, session cookie, tenant selector, or MQTT credential is exposed to JavaScript.
 

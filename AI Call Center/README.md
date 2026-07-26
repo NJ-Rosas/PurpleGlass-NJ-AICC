@@ -20,6 +20,22 @@ The repository contains the approved architecture documentation and the initial 
 - Node.js 24 LTS and npm
 - Docker Desktop with Docker Compose
 
+## One-click local startup
+
+The preferred Windows development flow is:
+
+1. Open the repository in VS Code.
+2. Open [`Start-PurpleGlass.ps1`](../Start-PurpleGlass.ps1).
+3. Press the PowerShell **Run / Play ▶** button.
+
+The launcher checks the toolchain, starts Docker Desktop when necessary, starts
+and health-checks PostgreSQL, MQTT, and Valkey, restores missing dependencies,
+applies existing migrations, and opens visible log windows for the Web BFF,
+integrations worker, and React frontend. It is safe to run repeatedly.
+
+See the [local prototype runbook](./docs/runbooks/LOCAL_PROTOTYPE.md) for URLs,
+manual fallback commands, shutdown behavior, and troubleshooting.
+
 Verify the installed tools from the project root:
 
 ```bash
