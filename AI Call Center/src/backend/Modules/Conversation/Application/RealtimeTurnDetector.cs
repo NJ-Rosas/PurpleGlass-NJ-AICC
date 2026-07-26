@@ -7,6 +7,7 @@ namespace PurpleGlass.Modules.Conversation.Application;
 public sealed class RealtimeTurnDetector(RealtimeVoiceOptions options) : IDisposable
 {
     private readonly MemoryStream buffer = new();
+    private readonly MemoryStream candidate = new();
     private AudioFormat? format;
     private long firstSequence;
     private long lastSequence = -1;
@@ -15,7 +16,14 @@ public sealed class RealtimeTurnDetector(RealtimeVoiceOptions options) : IDispos
     private TimeSpan trailingSilence;
     private TimeSpan utteranceDuration;
     private TimeSpan silenceDuration;
+    private TimeSpan candidateDuration;
     private bool speechActive;
+    private AudioFormat? candidateFormat;
+    private long candidateFirstSequence;
+    private long candidateLastSequence;
+    private DateTimeOffset candidateStartedAtUtc;
+    private int candidateFrames;
+    private int inboundFrames;
 
     public bool IsSpeechActive => speechActive;
     public TimeSpan SilenceDuration => silenceDuration;
@@ -31,21 +39,32 @@ public sealed class RealtimeTurnDetector(RealtimeVoiceOptions options) : IDispos
         TimeSpan frameDuration = Duration(frame);
         bool speechStarted = false;
 
-        if (containsSpeech && !speechActive)
-        {
-            ResetBuffer();
-            speechActive = true;
-            speechStarted = true;
-            format = frame.Format;
-            firstSequence = frame.Sequence;
-            startedAtUtc = frame.ReceivedAtUtc;
-            silenceDuration = TimeSpan.Zero;
-        }
-
         if (!speechActive)
         {
-            silenceDuration += frameDuration;
-            return new(false, null, false);
+            if (!containsSpeech)
+            {
+                RejectedVoiceCandidate? rejected = RejectCandidate();
+                ResetCandidate();
+                silenceDuration += frameDuration;
+                return new(false, null, false, rejected);
+            }
+
+            AppendCandidate(frame, frameDuration);
+            bool explicitSyntheticSpeech = frame.Format == AudioFormat.SyntheticText
+                && frame.SpeechStarted;
+            if (!explicitSyntheticSpeech && candidateDuration < options.MinimumSpeechDuration)
+            {
+                RejectedVoiceCandidate? rejected = null;
+                if (frame.EndOfUtterance)
+                {
+                    rejected = RejectCandidate();
+                    ResetCandidate();
+                }
+                return new(false, null, false, rejected);
+            }
+
+            ActivateCandidate();
+            speechStarted = true;
         }
 
         if (format != frame.Format)
@@ -53,10 +72,14 @@ public sealed class RealtimeTurnDetector(RealtimeVoiceOptions options) : IDispos
         if (buffer.Length + frame.Audio.Length > options.MaximumAudioBytesPerUtterance)
             throw new InvalidOperationException("The caller utterance exceeded the configured audio limit.");
 
-        buffer.Write(frame.Audio.Span);
-        lastFrameAtUtc = frame.ReceivedAtUtc;
-        utteranceDuration += frameDuration;
-        trailingSilence = containsSpeech ? TimeSpan.Zero : trailingSilence + frameDuration;
+        if (!speechStarted)
+        {
+            buffer.Write(frame.Audio.Span);
+            lastFrameAtUtc = frame.ReceivedAtUtc;
+            utteranceDuration += frameDuration;
+            inboundFrames++;
+            trailingSilence = containsSpeech ? TimeSpan.Zero : trailingSilence + frameDuration;
+        }
 
         if (!frame.EndOfUtterance
             && trailingSilence < options.EndOfUtteranceSilence
@@ -104,7 +127,8 @@ public sealed class RealtimeTurnDetector(RealtimeVoiceOptions options) : IDispos
         Guid turnId = DeterministicTurnId(firstSequence, lastSequence, audio);
         var utterance = new FinalizedVoiceUtterance(
             turnId, firstSequence, lastSequence, finalizedFormat, audio,
-            startedAtUtc, lastFrameAtUtc == default ? startedAtUtc : lastFrameAtUtc);
+            startedAtUtc, lastFrameAtUtc == default ? startedAtUtc : lastFrameAtUtc,
+            inboundFrames, utteranceDuration);
         ResetBuffer();
         speechActive = false;
         return utterance;
@@ -122,18 +146,93 @@ public sealed class RealtimeTurnDetector(RealtimeVoiceOptions options) : IDispos
     private void ResetBuffer()
     {
         buffer.SetLength(0);
+        buffer.Position = 0;
         format = null;
         firstSequence = 0;
         startedAtUtc = default;
         lastFrameAtUtc = default;
         trailingSilence = TimeSpan.Zero;
         utteranceDuration = TimeSpan.Zero;
+        inboundFrames = 0;
     }
 
-    public void Dispose() => buffer.Dispose();
+    private void AppendCandidate(RealtimeAudioFrame frame, TimeSpan duration)
+    {
+        if (candidateFormat is null)
+        {
+            candidateFormat = frame.Format;
+            candidateFirstSequence = frame.Sequence;
+            candidateStartedAtUtc = frame.ReceivedAtUtc;
+        }
+        else if (candidateFormat != frame.Format)
+        {
+            ResetCandidate();
+            candidateFormat = frame.Format;
+            candidateFirstSequence = frame.Sequence;
+            candidateStartedAtUtc = frame.ReceivedAtUtc;
+        }
+        if (candidate.Length + frame.Audio.Length > options.MaximumAudioBytesPerUtterance)
+            throw new InvalidOperationException("The caller speech candidate exceeded the configured audio limit.");
+        candidate.Write(frame.Audio.Span);
+        candidateLastSequence = frame.Sequence;
+        candidateDuration += duration;
+        candidateFrames++;
+        lastFrameAtUtc = frame.ReceivedAtUtc;
+    }
+
+    private void ActivateCandidate()
+    {
+        ResetBuffer();
+        speechActive = true;
+        format = candidateFormat;
+        firstSequence = candidateFirstSequence;
+        startedAtUtc = candidateStartedAtUtc;
+        utteranceDuration = candidateDuration;
+        inboundFrames = candidateFrames;
+        candidate.Position = 0;
+        candidate.CopyTo(buffer);
+        silenceDuration = TimeSpan.Zero;
+        trailingSilence = TimeSpan.Zero;
+        ResetCandidate();
+    }
+
+    private void ResetCandidate()
+    {
+        candidate.SetLength(0);
+        candidate.Position = 0;
+        candidateFormat = null;
+        candidateFirstSequence = 0;
+        candidateLastSequence = 0;
+        candidateStartedAtUtc = default;
+        candidateDuration = TimeSpan.Zero;
+        candidateFrames = 0;
+    }
+
+    private RejectedVoiceCandidate? RejectCandidate() => candidateFrames == 0
+        ? null
+        : new RejectedVoiceCandidate(
+            candidateFirstSequence,
+            candidateLastSequence,
+            candidateFrames,
+            candidateDuration,
+            "speech_too_short");
+
+    public void Dispose()
+    {
+        buffer.Dispose();
+        candidate.Dispose();
+    }
 }
 
 public sealed record TurnDetectionResult(
     bool SpeechStarted,
     FinalizedVoiceUtterance? FinalizedUtterance,
-    bool Duplicate);
+    bool Duplicate,
+    RejectedVoiceCandidate? RejectedCandidate = null);
+
+public sealed record RejectedVoiceCandidate(
+    long FirstSequence,
+    long LastSequence,
+    int InboundFrames,
+    TimeSpan Duration,
+    string DiscardReason);

@@ -12,6 +12,7 @@ public sealed record RealtimeVoiceOptions
     public TimeSpan CleanupTimeout { get; init; } = TimeSpan.FromSeconds(3);
     public TimeSpan EndOfUtteranceSilence { get; init; } = TimeSpan.FromMilliseconds(500);
     public TimeSpan MaximumUtteranceDuration { get; init; } = TimeSpan.FromSeconds(20);
+    public TimeSpan MinimumSpeechDuration { get; init; } = TimeSpan.FromMilliseconds(120);
     public int SpeechEnergyThreshold { get; init; } = 500;
     public int AudioQueueCapacity { get; init; } = 100;
     public int UtteranceQueueCapacity { get; init; } = 4;
@@ -28,6 +29,9 @@ public sealed record RealtimeVoiceOptions
         ValidateTimeout(CleanupTimeout, nameof(CleanupTimeout), TimeSpan.FromSeconds(30));
         ValidateTimeout(EndOfUtteranceSilence, nameof(EndOfUtteranceSilence), TimeSpan.FromSeconds(5));
         ValidateTimeout(MaximumUtteranceDuration, nameof(MaximumUtteranceDuration), TimeSpan.FromMinutes(2));
+        ValidateTimeout(MinimumSpeechDuration, nameof(MinimumSpeechDuration), TimeSpan.FromSeconds(2));
+        if (MinimumSpeechDuration >= MaximumUtteranceDuration)
+            throw new InvalidOperationException("MinimumSpeechDuration must be shorter than MaximumUtteranceDuration.");
         if (SpeechEnergyThreshold is < 0 or > short.MaxValue)
             throw new InvalidOperationException("SpeechEnergyThreshold is outside the PCM16 range.");
         if (AudioQueueCapacity is < 4 or > 2_000)

@@ -27,6 +27,8 @@ public sealed class RealtimeVoiceSession(
     private Guid? conversationId;
     private VoiceSessionState state = VoiceSessionState.Connecting;
     private string stopReason = "media_disconnected";
+    private string? activeResponseId;
+    private bool activeResponseCleared;
     private bool stopRequested;
     private int started;
 
@@ -252,6 +254,16 @@ public sealed class RealtimeVoiceSession(
             {
                 TurnDetectionResult result = detector.Push(frame);
                 if (result.Duplicate) continue;
+                if (result.RejectedCandidate is not null)
+                    diagnostics.RecordInboundTurn(new VoiceInboundTurnDiagnostic(
+                        identity!.CallId,
+                        identity.CorrelationId,
+                        $"candidate-{result.RejectedCandidate.FirstSequence}-{result.RejectedCandidate.LastSequence}",
+                        result.RejectedCandidate.InboundFrames,
+                        result.RejectedCandidate.Duration.TotalMilliseconds,
+                        SpeechQualified: false,
+                        SttSubmitted: false,
+                        result.RejectedCandidate.DiscardReason));
                 if (!detector.IsSpeechActive
                     && detector.SilenceDuration >= options.Conversation.InactivityTimeout)
                     throw new VoicePipelineException("maximum_silence", "The caller was inactive for too long.");
@@ -277,6 +289,7 @@ public sealed class RealtimeVoiceSession(
         {
             operation = activeOperation;
             interrupted = operation is not null;
+            if (interrupted && activeResponseId is not null) activeResponseCleared = true;
         }
 
         if (interrupted)
@@ -301,8 +314,10 @@ public sealed class RealtimeVoiceSession(
         CancellationToken cancellationToken)
     {
         int processedTurns = 0;
+        var submittedTurnIds = new HashSet<Guid>();
         await foreach (FinalizedVoiceUtterance utterance in reader.ReadAllAsync(cancellationToken))
         {
+            if (!submittedTurnIds.Add(utterance.TurnId)) continue;
             if (++processedTurns > options.Conversation.MaximumTurns)
                 throw new VoicePipelineException("maximum_turns", "The conversation reached its configured turn limit.");
             await ProcessTurnAsync(utterance, cancellationToken);
@@ -323,6 +338,15 @@ public sealed class RealtimeVoiceSession(
         {
             Guid callerTurnId = DeterministicId(
                 sessionIdentity.CallId, $"voice:caller:{utterance.TurnId:N}");
+            diagnostics.RecordInboundTurn(new VoiceInboundTurnDiagnostic(
+                sessionIdentity.CallId,
+                sessionIdentity.CorrelationId,
+                utterance.TurnId.ToString("N"),
+                utterance.InboundFrames,
+                (utterance.Duration ?? utterance.EndedAtUtc - utterance.StartedAtUtc).TotalMilliseconds,
+                SpeechQualified: true,
+                SttSubmitted: true,
+                DiscardReason: null));
             RuntimeInvocationContext context = RuntimeContext(callerTurnId);
             SpeechRecognitionResult recognition = await RecognizeAsync(context, utterance, operation.Token);
             if (recognition.Failure is not null)
@@ -450,6 +474,12 @@ public sealed class RealtimeVoiceSession(
         }
         try
         {
+            string diagnosticResponseId = Guid.NewGuid().ToString("N");
+            lock (synchronization)
+            {
+                activeResponseId = diagnosticResponseId;
+                activeResponseCleared = false;
+            }
             await PublishStateAsync(VoiceSessionState.Speaking, null, existingOperation.Token);
             using Activity? synthActivity = PurpleGlassTelemetry.Calls.StartActivity("speech.synthesize", ActivityKind.Client);
             PurpleGlassTelemetry.SpeechSynthesisRequests.Add(1);
@@ -466,12 +496,51 @@ public sealed class RealtimeVoiceSession(
             IReadOnlyList<SynthesizedAudioChunk> chunks = synthesis.AudioChunks ?? [];
             if (chunks.Count == 0)
                 throw new VoicePipelineException("speech_synthesis_invalid", "The speech provider returned no audio.");
+            SynthesizedAudioChunk[] orderedChunks = chunks.OrderBy(chunk => chunk.Sequence).ToArray();
+            if (orderedChunks.Count(chunk => chunk.IsFinal) != 1 || !orderedChunks[^1].IsFinal)
+                throw new VoicePipelineException(
+                    "speech_synthesis_incomplete", "The speech provider returned incomplete audio.");
             using Activity? sendActivity = PurpleGlassTelemetry.Calls.StartActivity("audio.send", ActivityKind.Producer);
-            foreach (SynthesizedAudioChunk chunk in chunks.OrderBy(chunk => chunk.Sequence))
-                await transport!.SendAsync(chunk, existingOperation.Token);
+            RealtimeAudioSendResult sendResult = RealtimeAudioSendResult.Pending;
+            foreach (SynthesizedAudioChunk chunk in orderedChunks)
+                sendResult = await transport!.SendAsync(chunk, existingOperation.Token);
+            if (!sendResult.MarkSent || sendResult.MediaMessageCount == 0 || sendResult.MuLawBytes == 0)
+                throw new VoicePipelineException(
+                    "speech_synthesis_output_missing", "Synthesized speech produced no provider media.");
+            diagnostics.RecordOutboundResponse(new VoiceOutboundResponseDiagnostic(
+                identity!.CallId,
+                identity.CorrelationId,
+                sendResult.ResponseId,
+                sendResult.SourcePcmBytes,
+                sendResult.SourceSamples,
+                sendResult.ResampledSamples,
+                sendResult.MuLawBytes,
+                sendResult.MediaMessageCount,
+                sendResult.MarkSent,
+                Cleared: false,
+                Canceled: false));
+        }
+        catch (OperationCanceledException)
+        {
+            bool cleared;
+            string responseId;
+            lock (synchronization)
+            {
+                cleared = activeResponseCleared;
+                responseId = activeResponseId ?? "response-canceled";
+            }
+            diagnostics.RecordOutboundResponse(new VoiceOutboundResponseDiagnostic(
+                identity!.CallId, identity.CorrelationId, responseId,
+                0, 0, 0, 0, 0, false, cleared, Canceled: true));
+            throw;
         }
         finally
         {
+            lock (synchronization)
+            {
+                activeResponseId = null;
+                activeResponseCleared = false;
+            }
             if (ownedOperation is not null)
             {
                 EndOperation(ownedOperation);

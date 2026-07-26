@@ -353,6 +353,22 @@ public sealed class OpenAiAdapterTests
         Assert.False(result.Failure?.Retryable);
     }
 
+    [Fact]
+    public async Task SynthesisRejectsSuccessfulResponseWithNoPcmBytes()
+    {
+        using var httpClient = new HttpClient(new RecordingHttpMessageHandler((_, _) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new ByteArrayContent([]),
+            })));
+        var synthesizer = new OpenAiSpeechSynthesizer(httpClient, SpeechOptions());
+
+        SpeechSynthesisResult result = await synthesizer.SynthesizeAsync(SynthesisRequest(), default);
+
+        Assert.Equal("speech_synthesis_response_invalid", result.Failure?.Code);
+        Assert.Null(result.AudioChunks);
+    }
+
     [Theory]
     [InlineData("RIFF")]
     [InlineData("ID3\0")]

@@ -28,7 +28,32 @@ public sealed class VoicePersistenceException(
 public interface IVoiceSessionDiagnostics
 {
     void RecordException(VoiceSessionExceptionDiagnostic diagnostic);
+    void RecordInboundTurn(VoiceInboundTurnDiagnostic diagnostic) { }
+    void RecordOutboundResponse(VoiceOutboundResponseDiagnostic diagnostic) { }
 }
+
+public sealed record VoiceInboundTurnDiagnostic(
+    Guid CallId,
+    Guid CorrelationId,
+    string TurnId,
+    int InboundFrames,
+    double DurationMs,
+    bool SpeechQualified,
+    bool SttSubmitted,
+    string? DiscardReason);
+
+public sealed record VoiceOutboundResponseDiagnostic(
+    Guid CallId,
+    Guid CorrelationId,
+    string ResponseId,
+    int SourcePcmBytes,
+    int SourceSamples,
+    int ResampledSamples,
+    int MuLawBytes,
+    int MediaMessageCount,
+    bool MarkSent,
+    bool Cleared,
+    bool Canceled);
 
 public sealed record VoiceSessionExceptionDiagnostic(
     Guid CallId,

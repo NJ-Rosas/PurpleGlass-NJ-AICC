@@ -94,6 +94,10 @@ A controlled synthetic Task 10 call has proven the complete multi-turn path in t
 
 That call also exposed an intermittent word-tail hiss. Deterministic analysis traced it to unfiltered 24 kHz to 8 kHz decimation: high-frequency energy in some synthesized fricatives folded into the audible telephone band. The corrected path applies one response-contiguous, windowed-sinc low-pass resampling operation, so source chunk boundaries do not reset filter state. It does not trim words, add fades, or append synthetic silence. The realtime implementation continues to use a fresh short database scope for each mutation; it does not retain a `DbContext` or transaction across speech duration, OpenAI calls, WebSocket I/O, or TTS playback.
 
+The first controlled call after that anti-alias change exposed a separate live regression. OpenAI speech requests returned HTTP 200 and assistant turns were durable, but no assistant audio was audible. At the same time, isolated inbound frames were immediately treated as speech, repeatedly canceled the active response and sent Twilio `clear`, then became short STT submissions after trailing silence. OpenAI produced non-empty, sometimes multilingual text from that under-qualified audio; those results became caller turns until the unchanged `maximum_turns` safety guard stopped the loop and the session failed. The provider stream parser was already discarding `outbound` track events, so direct Twilio outbound-track loopback was not the source. Acoustic echo remains possible at the handset and is handled as inbound audio; it must satisfy the same speech qualification window.
+
+The hardened implementation requires 120 ms of contiguous energy-qualified PCM before declaring speech, retaining those candidate frames as the utterance pre-roll. Digital/μ-law silence, low-level noise, and a short transient are discarded before STT. Inbound ownership uses Twilio media `chunk` and `timestamp`; repeated chunks are dropped and backwards timestamps are rejected. A finalized turn ID is submitted at most once. This leaves `maximum_turns` unchanged but ensures unqualified or duplicate internal work does not consume it.
+
 The exact production outbound pipeline is:
 
 1. OpenAI `gpt-4o-mini-tts` returns requested raw `pcm`: signed 16-bit little-endian, 24 kHz, mono, with no container header.
@@ -101,6 +105,8 @@ The exact production outbound pipeline is:
 3. A windowed-sinc band-limited converter low-pass filters and resamples the contiguous response to signed 16-bit PCM at 8 kHz, mono. Boundary coefficients are normalized; the final partial sample count is rounded from the real source length without capacity padding.
 4. The standard G.711 μ-law encoder converts every valid 8 kHz sample. The resulting raw `audio/x-mulaw` bytes are split at the configured outbound media bound (8 KiB by default), Base64-encoded from the exact offset and length, and sent in serialized WebSocket text `media` messages.
 5. A response-specific `mark` follows its media. Barge-in sends Twilio `clear` under the same per-call write lock and resets any locally buffered partial response before a later response can start.
+
+Every completed send now returns and logs structured counts for source PCM bytes/samples, resampled samples, μ-law bytes, media-message count, and mark emission. A synthesis response with no final chunk, zero PCM, zero μ-law bytes, zero media messages, or no mark fails safely instead of appearing successful. Inbound diagnostics record only frame count, duration, qualification/submission booleans, and a language-neutral discard reason. Neither diagnostic contains audio, Base64, transcript text, phone numbers, or credentials.
 
 Transport-quality symptoms include hiss following fricatives, clicks at regular source-chunk intervals, delayed audio from an interrupted response, or a malformed/absent greeting while the call remains connected. Diagnose these with the deterministic audio tests and safe call/state correlation first. Never log audio or Base64 payloads. The implementation has no pooled outbound audio buffers; response, resampled, encoded, and serialized buffers use their written lengths and are cleared after use.
 
@@ -115,9 +121,15 @@ For an existing Blueprint, use this exact workflow:
 7. Require BFF `/health/live` to return HTTP 200.
 8. Require BFF `/health/ready` to return HTTP 200 with healthy PostgreSQL and telephony/voice checks.
 9. Sign in again if the BFF restarted and its ephemeral Data Protection keys invalidated the old development session.
-10. Make one controlled call to the verified trial recipient, hear the initial greeting, and complete several conversational turns.
-11. Listen specifically for word-tail hiss, clicks, or static; if appropriate, make one natural interruption and confirm stale speech stops.
-12. Hang up normally, then confirm completed call/conversation state and the durable transcript after refresh.
+10. Make one controlled call to the verified trial recipient and hear the initial greeting.
+11. Remain silent briefly and verify there is no caller turn, STT submission, or phantom assistant response.
+12. Speak one clear sentence and hear exactly one assistant response.
+13. Wait silently again and verify no extra turn or response appears.
+14. Complete several caller/assistant turns and confirm outbound media counts are nonzero for every completed response.
+15. Make one natural barge-in; confirm `clear` stops the old response, the caller utterance is recognized once, and the next response plays normally.
+16. Listen specifically for word-tail hiss, clicks, or static.
+17. Hang up normally, then confirm completed call/conversation state and the durable transcript after refresh.
+18. Confirm the session is `Completed`, not `Failed`, and that `maximum_turns` did not occur unless the configured number of legitimate caller utterances was genuinely reached.
 
 Do not place the call when Blueprint sync is pending, a required secret is missing, or readiness is not HTTP 200.
 

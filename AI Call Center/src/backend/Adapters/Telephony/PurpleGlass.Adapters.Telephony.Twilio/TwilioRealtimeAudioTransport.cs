@@ -2,6 +2,8 @@ using System.Net.WebSockets;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Diagnostics;
+using System.Collections.Concurrent;
 using PurpleGlass.Modules.Conversation.Application;
 
 namespace PurpleGlass.Adapters.Telephony.Twilio;
@@ -12,10 +14,13 @@ public sealed class TwilioRealtimeAudioTransport : IRealtimeAudioTransport
     private readonly TwilioRealtimeAudioOptions options;
     private readonly TimeProvider timeProvider;
     private readonly SemaphoreSlim writeLock = new(1, 1);
+    private readonly ConcurrentDictionary<string, byte> pendingMarks = new(StringComparer.Ordinal);
     private MemoryStream? pendingPcm;
     private AudioFormat? pendingFormat;
     private long nextChunkSequence = 1;
     private long markSequence;
+    private long lastInboundMediaChunk;
+    private int lastInboundTimestamp = -1;
     private int receiveStarted;
     private int completed;
     private int disposed;
@@ -56,7 +61,7 @@ public sealed class TwilioRealtimeAudioTransport : IRealtimeAudioTransport
         }
     }
 
-    public async ValueTask SendAsync(
+    public async ValueTask<RealtimeAudioSendResult> SendAsync(
         SynthesizedAudioChunk chunk,
         CancellationToken cancellationToken)
     {
@@ -71,9 +76,13 @@ public sealed class TwilioRealtimeAudioTransport : IRealtimeAudioTransport
         {
             ThrowIfUnavailable();
             AppendChunkLocked(chunk);
-            if (!chunk.IsFinal) return;
+            if (!chunk.IsFinal) return RealtimeAudioSendResult.Pending;
 
             byte[] responsePcm = TakePendingPcmLocked();
+            int sourcePcmBytes = responsePcm.Length;
+            if (sourcePcmBytes == 0)
+                throw new TwilioRealtimeAudioException(
+                    "provider_media_pcm_invalid", "PCM audio response was empty.");
             try
             {
                 pcm = chunk.Format.SampleRateHz == TwilioRealtimeAudioProtocol.TelephonySampleRate
@@ -89,6 +98,7 @@ public sealed class TwilioRealtimeAudioTransport : IRealtimeAudioTransport
             }
             encoded = TwilioMuLawCodec.EncodePcm16(pcm);
 
+            int mediaMessageCount = 0;
             for (int offset = 0; offset < encoded.Length; offset += options.MaxOutboundMediaBytes)
             {
                 int length = Math.Min(options.MaxOutboundMediaBytes, encoded.Length - offset);
@@ -99,18 +109,35 @@ public sealed class TwilioRealtimeAudioTransport : IRealtimeAudioTransport
                     streamSid = ProviderMediaStreamId,
                     media = new { payload },
                 }, cancellationToken);
+                mediaMessageCount++;
             }
 
-            if (chunk.IsFinal)
+            if (mediaMessageCount == 0 || encoded.Length == 0)
+                throw new TwilioRealtimeAudioException(
+                    "provider_media_output_empty", "PCM audio produced no provider media.");
+
+            string name = $"response-{Interlocked.Increment(ref markSequence)}";
+            await SendWireMessageLockedAsync(new
             {
-                string name = $"response-{Interlocked.Increment(ref markSequence)}";
-                await SendWireMessageLockedAsync(new
-                {
-                    @event = "mark",
-                    streamSid = ProviderMediaStreamId,
-                    mark = new { name },
-                }, cancellationToken);
-            }
+                @event = "mark",
+                streamSid = ProviderMediaStreamId,
+                mark = new { name },
+            }, cancellationToken);
+            _ = pendingMarks.TryAdd(name, 0);
+            Activity.Current?.SetTag("voice.source_pcm_bytes", sourcePcmBytes);
+            Activity.Current?.SetTag("voice.source_samples", sourcePcmBytes / sizeof(short));
+            Activity.Current?.SetTag("voice.resampled_samples", pcm.Length / sizeof(short));
+            Activity.Current?.SetTag("voice.mulaw_bytes", encoded.Length);
+            Activity.Current?.SetTag("voice.media_message_count", mediaMessageCount);
+            Activity.Current?.SetTag("voice.mark_sent", true);
+            return new RealtimeAudioSendResult(
+                name,
+                sourcePcmBytes,
+                sourcePcmBytes / sizeof(short),
+                pcm.Length / sizeof(short),
+                encoded.Length,
+                mediaMessageCount,
+                true);
         }
         finally
         {
@@ -203,16 +230,22 @@ public sealed class TwilioRealtimeAudioTransport : IRealtimeAudioTransport
 
     private ReceiveEvent ParseMedia(JsonElement root)
     {
-        long sequence = TwilioRealtimeAudioProtocol.RequirePositiveInt64(root, "sequenceNumber");
+        _ = TwilioRealtimeAudioProtocol.RequirePositiveInt64(root, "sequenceNumber");
         TwilioRealtimeAudioProtocol.RequireMatchingStreamSid(root, ProviderMediaStreamId);
         JsonElement media = TwilioRealtimeAudioProtocol.RequireObject(root, "media");
         string track = TwilioRealtimeAudioProtocol.RequireString(media, "track", 20);
-        _ = TwilioRealtimeAudioProtocol.RequirePositiveInt64(media, "chunk");
-        _ = TwilioRealtimeAudioProtocol.RequireInt32(media, "timestamp", 0, int.MaxValue);
+        long mediaChunk = TwilioRealtimeAudioProtocol.RequirePositiveInt64(media, "chunk");
+        int timestamp = TwilioRealtimeAudioProtocol.RequireInt32(media, "timestamp", 0, int.MaxValue);
         if (track == "outbound") return ReceiveEvent.None;
         if (!string.Equals(track, "inbound", StringComparison.Ordinal))
             throw TwilioRealtimeAudioProtocol.ProtocolError(
                 "provider_media_track_invalid", "Provider media track was invalid.");
+        if (mediaChunk <= lastInboundMediaChunk) return ReceiveEvent.None;
+        if (timestamp < lastInboundTimestamp)
+            throw TwilioRealtimeAudioProtocol.ProtocolError(
+                "provider_media_timestamp_invalid", "Provider media timestamp moved backwards.");
+        lastInboundMediaChunk = mediaChunk;
+        lastInboundTimestamp = timestamp;
 
         string payload = TwilioRealtimeAudioProtocol.RequireString(
             media,
@@ -229,7 +262,7 @@ public sealed class TwilioRealtimeAudioTransport : IRealtimeAudioTransport
                     "provider_media_payload_invalid", "Provider media payload was invalid.");
             byte[] pcm = TwilioMuLawCodec.DecodeToPcm16(encoded.AsSpan(0, decodedLength));
             return new ReceiveEvent(new RealtimeAudioFrame(
-                sequence,
+                mediaChunk,
                 InputFormat,
                 pcm,
                 timeProvider.GetUtcNow()), false);
@@ -245,7 +278,9 @@ public sealed class TwilioRealtimeAudioTransport : IRealtimeAudioTransport
         _ = TwilioRealtimeAudioProtocol.RequirePositiveInt64(root, "sequenceNumber");
         TwilioRealtimeAudioProtocol.RequireMatchingStreamSid(root, ProviderMediaStreamId);
         JsonElement mark = TwilioRealtimeAudioProtocol.RequireObject(root, "mark");
-        _ = TwilioRealtimeAudioProtocol.RequireString(mark, "name", 128);
+        string name = TwilioRealtimeAudioProtocol.RequireString(mark, "name", 128);
+        bool acknowledged = pendingMarks.TryRemove(name, out _);
+        Activity.Current?.SetTag("voice.mark_acknowledged", acknowledged);
         return ReceiveEvent.None;
     }
 

@@ -38,11 +38,23 @@ public interface IRealtimeAudioTransport : IAsyncDisposable
 
     IAsyncEnumerable<RealtimeAudioFrame> ReceiveAsync(CancellationToken cancellationToken);
 
-    ValueTask SendAsync(SynthesizedAudioChunk chunk, CancellationToken cancellationToken);
+    ValueTask<RealtimeAudioSendResult> SendAsync(SynthesizedAudioChunk chunk, CancellationToken cancellationToken);
 
     ValueTask ClearPlaybackAsync(CancellationToken cancellationToken);
 
     ValueTask CompleteAsync(string reason, CancellationToken cancellationToken);
+}
+
+public sealed record RealtimeAudioSendResult(
+    string ResponseId,
+    int SourcePcmBytes,
+    int SourceSamples,
+    int ResampledSamples,
+    int MuLawBytes,
+    int MediaMessageCount,
+    bool MarkSent)
+{
+    public static RealtimeAudioSendResult Pending { get; } = new(string.Empty, 0, 0, 0, 0, 0, false);
 }
 
 public sealed record VoiceSessionStateChange(
@@ -70,4 +82,6 @@ public sealed record FinalizedVoiceUtterance(
     AudioFormat Format,
     ReadOnlyMemory<byte> Audio,
     DateTimeOffset StartedAtUtc,
-    DateTimeOffset EndedAtUtc);
+    DateTimeOffset EndedAtUtc,
+    int InboundFrames = 1,
+    TimeSpan? Duration = null);

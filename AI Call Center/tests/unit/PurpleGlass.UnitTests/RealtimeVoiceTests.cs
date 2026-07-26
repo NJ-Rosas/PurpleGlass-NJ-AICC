@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Buffers.Binary;
 using System.Text;
 using PurpleGlass.Adapters.AI.Mock;
 using PurpleGlass.Adapters.Audio.Fake;
@@ -94,6 +95,60 @@ public sealed class RealtimeVoiceTests
         Assert.NotNull(endpoint.FinalizedUtterance);
         Assert.Equal(1, endpoint.FinalizedUtterance.FirstSequence);
         Assert.Equal(3, endpoint.FinalizedUtterance.LastSequence);
+        Assert.False(detector.IsSpeechActive);
+    }
+
+    [Fact]
+    public void SilenceLowNoiseAndShortTransientNeverBecomeCallerUtterances()
+    {
+        using var detector = new RealtimeTurnDetector(Options());
+        DateTimeOffset now = DateTimeOffset.Parse("2026-07-26T12:00:00Z", CultureInfo.InvariantCulture);
+        var finalized = new List<FinalizedVoiceUtterance>();
+        var rejected = new List<RejectedVoiceCandidate>();
+        long sequence = 1;
+
+        for (int index = 0; index < 150; index++)
+            Capture(detector.Push(PcmFrame(sequence++, now, amplitude: 0)), finalized, rejected);
+        for (int index = 0; index < 150; index++)
+            Capture(detector.Push(PcmFrame(sequence++, now, amplitude: 200)), finalized, rejected);
+        Capture(detector.Push(PcmFrame(sequence++, now, amplitude: 12_000)), finalized, rejected);
+        for (int index = 0; index < 30; index++)
+            Capture(detector.Push(PcmFrame(sequence++, now, amplitude: 0)), finalized, rejected);
+
+        Assert.Empty(finalized);
+        Assert.False(detector.IsSpeechActive);
+        RejectedVoiceCandidate transient = Assert.Single(rejected);
+        Assert.Equal("speech_too_short", transient.DiscardReason);
+        Assert.False(detector.Flush() is not null);
+    }
+
+    [Fact]
+    public void QualifiedSpeechSeparatedByBriefPauseProducesExactlyOneUtterance()
+    {
+        RealtimeVoiceOptions options = Options() with
+        {
+            MinimumSpeechDuration = TimeSpan.FromMilliseconds(120),
+            EndOfUtteranceSilence = TimeSpan.FromMilliseconds(500),
+        };
+        using var detector = new RealtimeTurnDetector(options);
+        DateTimeOffset now = DateTimeOffset.Parse("2026-07-26T12:00:00Z", CultureInfo.InvariantCulture);
+        var finalized = new List<FinalizedVoiceUtterance>();
+        var rejected = new List<RejectedVoiceCandidate>();
+        long sequence = 1;
+
+        for (int index = 0; index < 8; index++)
+            Capture(detector.Push(PcmFrame(sequence++, now, amplitude: 8_000)), finalized, rejected);
+        for (int index = 0; index < 5; index++)
+            Capture(detector.Push(PcmFrame(sequence++, now, amplitude: 0)), finalized, rejected);
+        for (int index = 0; index < 8; index++)
+            Capture(detector.Push(PcmFrame(sequence++, now, amplitude: 8_000)), finalized, rejected);
+        for (int index = 0; index < 25; index++)
+            Capture(detector.Push(PcmFrame(sequence++, now, amplitude: 0)), finalized, rejected);
+
+        FinalizedVoiceUtterance utterance = Assert.Single(finalized);
+        Assert.Empty(rejected);
+        Assert.Equal(46, utterance.InboundFrames);
+        Assert.Equal(TimeSpan.FromMilliseconds(920), utterance.Duration);
         Assert.False(detector.IsSpeechActive);
     }
 
@@ -305,4 +360,28 @@ public sealed class RealtimeVoiceTests
 
     private static RealtimeAudioFrame Silence(long sequence, DateTimeOffset receivedAt) =>
         new(sequence, AudioFormat.SyntheticText, ReadOnlyMemory<byte>.Empty, receivedAt);
+
+    private static RealtimeAudioFrame PcmFrame(long sequence, DateTimeOffset receivedAt, short amplitude)
+    {
+        const int samples = 160;
+        var pcm = new byte[samples * sizeof(short)];
+        for (int index = 0; index < samples; index++)
+        {
+            short sample = amplitude == 0 ? (short)0
+                : (short)(index % 8 < 4 ? amplitude : -amplitude);
+            BinaryPrimitives.WriteInt16LittleEndian(pcm.AsSpan(index * sizeof(short)), sample);
+        }
+        return new RealtimeAudioFrame(
+            sequence, AudioFormat.Pcm16(), pcm,
+            receivedAt.AddMilliseconds((sequence - 1) * 20));
+    }
+
+    private static void Capture(
+        TurnDetectionResult result,
+        List<FinalizedVoiceUtterance> finalized,
+        List<RejectedVoiceCandidate> rejected)
+    {
+        if (result.FinalizedUtterance is not null) finalized.Add(result.FinalizedUtterance);
+        if (result.RejectedCandidate is not null) rejected.Add(result.RejectedCandidate);
+    }
 }

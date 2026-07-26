@@ -1,5 +1,6 @@
 using System.Text;
 using System.Data.Common;
+using System.Buffers.Binary;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using PurpleGlass.Adapters.Audio.Fake;
@@ -435,6 +436,62 @@ public sealed class RealtimeVoicePipelineTests(DurablePathFixture fixture)
     }
 
     [Fact]
+    public async Task SustainedSilenceAndLowNoiseDoNotSubmitSttOrConsumeTurns()
+    {
+        await using SessionHarness harness = await CreateHarnessAsync();
+        Task run = harness.Start();
+        _ = await harness.States.WaitForAsync(change => change.State == VoiceSessionState.Listening);
+        long sequence = 1;
+
+        sequence = await QueuePcmFramesAsync(harness.Transport, sequence, 150, amplitude: 0);
+        _ = await QueuePcmFramesAsync(harness.Transport, sequence, 150, amplitude: 200);
+        await Task.Delay(100);
+
+        Assert.Empty(harness.Recognizer.Requests);
+        Assert.Empty(harness.LanguageModel.Requests);
+        Assert.Single(harness.Synthesizer.Requests);
+        Assert.Equal(VoiceSessionState.Listening, harness.Session.State);
+        Assert.DoesNotContain(harness.States.Changes,
+            change => change.SafeCode == "maximum_turns");
+
+        harness.Transport.CompleteInput();
+        await run.WaitAsync(TestTimeout);
+        ConversationDetails details = await ReadDetailsAsync(harness.TenantId, harness.CallId);
+        Assert.Single(details.Transcript);
+        Assert.Equal("Assistant", details.Transcript[0].Speaker);
+        await AssertCompletedAndDisposedAsync(harness, "media_disconnected");
+    }
+
+    [Fact]
+    public async Task OneQualifiedPcmUtteranceSubmitsSttOnceAndLaterSilenceStaysSilent()
+    {
+        var recognizer = new ControlledSpeechRecognizer(response: (_, _) => "One clear sentence");
+        await using SessionHarness harness = await CreateHarnessAsync(recognizer: recognizer);
+        Task run = harness.Start();
+        _ = await harness.States.WaitForAsync(change => change.State == VoiceSessionState.Listening);
+        long sequence = 1;
+
+        sequence = await QueuePcmFramesAsync(harness.Transport, sequence, 20, amplitude: 0);
+        sequence = await QueuePcmFramesAsync(harness.Transport, sequence, 8, amplitude: 8_000);
+        sequence = await QueuePcmFramesAsync(harness.Transport, sequence, 25, amplitude: 0);
+        _ = await harness.States.WaitForOccurrencesAsync(VoiceSessionState.Listening, 2);
+        _ = await QueuePcmFramesAsync(harness.Transport, sequence, 100, amplitude: 0);
+        await Task.Delay(100);
+
+        Assert.Single(harness.Recognizer.Requests);
+        Assert.Single(harness.LanguageModel.Requests);
+        Assert.Equal(2, harness.Synthesizer.Requests.Count);
+        Assert.Equal(VoiceSessionState.Listening, harness.Session.State);
+
+        harness.Transport.CompleteInput();
+        await run.WaitAsync(TestTimeout);
+        ConversationDetails details = await ReadDetailsAsync(harness.TenantId, harness.CallId);
+        Assert.Equal([Greeting, "One clear sentence", "Hello from the assistant."],
+            details.Transcript.OrderBy(turn => turn.SequenceNumber).Select(turn => turn.Text).ToArray());
+        await AssertCompletedAndDisposedAsync(harness, "media_disconnected");
+    }
+
+    [Fact]
     public async Task StopRequestedBeforeRuntimeStartCancelsImmediatelyAndCleansUpTransport()
     {
         await using SessionHarness harness = await CreateHarnessAsync();
@@ -586,6 +643,31 @@ public sealed class RealtimeVoicePipelineTests(DurablePathFixture fixture)
 
     private static string[] DecodeOutput(FakeRealtimeAudioTransport transport) =>
         transport.OutboundChunks.Select(chunk => Encoding.UTF8.GetString(chunk.Audio.ToArray())).ToArray();
+
+    private static async Task<long> QueuePcmFramesAsync(
+        FakeRealtimeAudioTransport transport,
+        long firstSequence,
+        int count,
+        short amplitude)
+    {
+        for (int frameIndex = 0; frameIndex < count; frameIndex++)
+        {
+            var pcm = new byte[160 * sizeof(short)];
+            for (int sampleIndex = 0; sampleIndex < 160; sampleIndex++)
+            {
+                short sample = amplitude == 0 ? (short)0
+                    : (short)(sampleIndex % 8 < 4 ? amplitude : -amplitude);
+                BinaryPrimitives.WriteInt16LittleEndian(pcm.AsSpan(sampleIndex * sizeof(short)), sample);
+            }
+            long sequence = firstSequence + frameIndex;
+            await transport.QueueFrameAsync(new RealtimeAudioFrame(
+                sequence,
+                AudioFormat.Pcm16(),
+                pcm,
+                DateTimeOffset.UtcNow.AddMilliseconds(sequence * 20)));
+        }
+        return firstSequence + count;
+    }
 
     private static async Task AssertCompletedAndDisposedAsync(SessionHarness harness, string reason)
     {
@@ -846,17 +928,20 @@ public sealed class RealtimeVoicePipelineTests(DurablePathFixture fixture)
         private readonly int? blockOnInvocation;
         private readonly int? failureOnInvocation;
         private readonly RuntimeFailure failure;
+        private readonly Func<SpeechRecognitionRequest, int, string>? response;
         private int cancellationObserved;
 
         public ControlledSpeechRecognizer(
             int? blockOnInvocation = null,
             int? failureOnInvocation = null,
-            RuntimeFailure? failure = null)
+            RuntimeFailure? failure = null,
+            Func<SpeechRecognitionRequest, int, string>? response = null)
         {
             this.blockOnInvocation = blockOnInvocation;
             this.failureOnInvocation = failureOnInvocation;
             this.failure = failure ?? new RuntimeFailure(
                 "speech_recognition_failed", "Speech recognition is unavailable.", false);
+            this.response = response;
         }
 
         public string AdapterKey => "controlled-speech";
@@ -874,9 +959,9 @@ public sealed class RealtimeVoicePipelineTests(DurablePathFixture fixture)
             if (failureOnInvocation == invocation)
                 return new SpeechRecognitionResult(
                     string.Empty, null, request.Language, null, null, false, failure);
-            string text = request.AudioInput is { } input
+            string text = response?.Invoke(request, invocation) ?? (request.AudioInput is { } input
                 ? Encoding.UTF8.GetString(input.Audio.Span)
-                : request.Input.Text;
+                : request.Input.Text);
             return new SpeechRecognitionResult(text, 0.99m, request.Language, null, null, true);
         }
 

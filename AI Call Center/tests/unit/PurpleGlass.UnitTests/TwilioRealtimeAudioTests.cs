@@ -38,7 +38,7 @@ public sealed class TwilioRealtimeAudioTests
     }
 
     [Fact]
-    public async Task MuLawPcmRoundTripPreservesAudioAndDuplicateSequenceForCoreDeduplication()
+    public async Task MuLawPcmRoundTripPreservesAudioAndDropsDuplicateMediaChunk()
     {
         byte[] sourceMuLaw = [0xff, 0x00, 0x80];
         string payload = Convert.ToBase64String(sourceMuLaw);
@@ -51,8 +51,8 @@ public sealed class TwilioRealtimeAudioTests
         var frames = new List<RealtimeAudioFrame>();
         await foreach (RealtimeAudioFrame frame in inbound.ReceiveAsync(default)) frames.Add(frame);
 
-        Assert.Equal(2, frames.Count);
-        Assert.All(frames, frame => Assert.Equal(2, frame.Sequence));
+        Assert.Single(frames);
+        Assert.Equal(1, frames[0].Sequence);
         Assert.All(frames, frame => Assert.Equal(AudioFormat.Pcm16(), frame.Format));
         Assert.Equal(0, BinaryPrimitives.ReadInt16LittleEndian(frames[0].Audio.Span));
         Assert.Equal(-32_124, BinaryPrimitives.ReadInt16LittleEndian(frames[0].Audio.Span[2..]));
@@ -102,6 +102,59 @@ public sealed class TwilioRealtimeAudioTests
             media.RootElement.GetProperty("media").GetProperty("payload").GetString()!);
         Assert.Equal(2, encoded.Length);
         Assert.All(encoded, value => Assert.Equal(0xff, value));
+        await transport.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task CompleteResponseReturnsMeasuredMediaAndRejectsEmptyOutput()
+    {
+        var socket = InitializedSocket();
+        TwilioRealtimeAudioTransport transport = await InitializeAsync(socket);
+        byte[] source = SinePcm(24_000, 1_000, 0.1, 10_000);
+
+        RealtimeAudioSendResult result = await transport.SendAsync(new SynthesizedAudioChunk(
+            1, AudioFormat.Pcm16(24_000), source, IsFinal: true), default);
+
+        Assert.Equal(source.Length, result.SourcePcmBytes);
+        Assert.Equal(source.Length / sizeof(short), result.SourceSamples);
+        Assert.Equal(800, result.ResampledSamples);
+        Assert.Equal(800, result.MuLawBytes);
+        Assert.Equal(1, result.MediaMessageCount);
+        Assert.True(result.MarkSent);
+        Assert.Equal(["media", "mark"], socket.SentTextMessages.Select(message =>
+        {
+            using JsonDocument json = JsonDocument.Parse(message);
+            return json.RootElement.GetProperty("event").GetString()!;
+        }).ToArray());
+        await transport.DisposeAsync();
+
+        var emptySocket = InitializedSocket();
+        TwilioRealtimeAudioTransport emptyTransport = await InitializeAsync(emptySocket);
+        TwilioRealtimeAudioException exception = await Assert.ThrowsAsync<TwilioRealtimeAudioException>(async () =>
+            await emptyTransport.SendAsync(new SynthesizedAudioChunk(
+                1, AudioFormat.Pcm16(24_000), ReadOnlyMemory<byte>.Empty, IsFinal: true), default));
+        Assert.Equal("provider_media_pcm_invalid", exception.Code);
+        Assert.Empty(emptySocket.SentTextMessages);
+        await emptyTransport.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task OutboundTrackAndDuplicateInboundChunksCannotBecomeCallerFrames()
+    {
+        var socket = InitializedSocket();
+        string silence = Convert.ToBase64String(Enumerable.Repeat((byte)0xff, 160).ToArray());
+        socket.EnqueueJson(MediaMessage(2, 1, silence, track: "outbound", timestamp: 0));
+        socket.EnqueueJson(MediaMessage(3, 1, silence, track: "inbound", timestamp: 0));
+        socket.EnqueueJson(MediaMessage(4, 1, silence, track: "inbound", timestamp: 0));
+        socket.EnqueueJson(MediaMessage(5, 2, silence, track: "inbound", timestamp: 20));
+        socket.EnqueueJson(StopMessage(6));
+        TwilioRealtimeAudioTransport transport = await InitializeAsync(socket);
+
+        var frames = new List<RealtimeAudioFrame>();
+        await foreach (RealtimeAudioFrame frame in transport.ReceiveAsync(default)) frames.Add(frame);
+
+        Assert.Equal([1L, 2L], frames.Select(frame => frame.Sequence).ToArray());
+        Assert.All(frames, frame => Assert.All(frame.Audio.ToArray(), value => Assert.Equal(0, value)));
         await transport.DisposeAsync();
     }
 
@@ -429,15 +482,20 @@ public sealed class TwilioRealtimeAudioTests
             streamSid,
         };
 
-    private static object MediaMessage(long sequence, long chunk, string payload) => new
+    private static object MediaMessage(
+        long sequence,
+        long chunk,
+        string payload,
+        string track = "inbound",
+        int timestamp = 0) => new
     {
         @event = "media",
         sequenceNumber = sequence.ToString(System.Globalization.CultureInfo.InvariantCulture),
         media = new
         {
-            track = "inbound",
+            track,
             chunk = chunk.ToString(System.Globalization.CultureInfo.InvariantCulture),
-            timestamp = "0",
+            timestamp = timestamp.ToString(System.Globalization.CultureInfo.InvariantCulture),
             payload,
         },
         streamSid = StreamSid,

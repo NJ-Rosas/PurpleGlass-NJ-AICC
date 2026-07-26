@@ -142,11 +142,35 @@ public sealed partial class BffVoiceSessionDiagnostics(ILogger<BffVoiceSessionDi
             diagnostic.ProviderCallId, diagnostic.CorrelationId, diagnostic.Stage,
             diagnostic.SafeCode, diagnostic.ExceptionType, diagnostic.RootExceptionType);
 
+    public void RecordInboundTurn(VoiceInboundTurnDiagnostic diagnostic) =>
+        LogInboundTurn(logger, diagnostic.CallId, diagnostic.CorrelationId,
+            diagnostic.TurnId, diagnostic.InboundFrames, diagnostic.DurationMs,
+            diagnostic.SpeechQualified, diagnostic.SttSubmitted,
+            diagnostic.DiscardReason ?? "none");
+
+    public void RecordOutboundResponse(VoiceOutboundResponseDiagnostic diagnostic) =>
+        LogOutboundResponse(logger, diagnostic.CallId, diagnostic.CorrelationId,
+            diagnostic.ResponseId, diagnostic.SourcePcmBytes, diagnostic.SourceSamples,
+            diagnostic.ResampledSamples, diagnostic.MuLawBytes, diagnostic.MediaMessageCount,
+            diagnostic.MarkSent, diagnostic.Cleared, diagnostic.Canceled);
+
     [LoggerMessage(204, LogLevel.Error,
         "Realtime voice session exception; CallId={CallId}, ConversationId={ConversationId}, TenantId={TenantId}, LocationId={LocationId}, Provider={Provider}, ProviderCallId={ProviderCallId}, CorrelationId={CorrelationId}, Stage={Stage}, SafeCode={SafeCode}, ExceptionType={ExceptionType}, RootExceptionType={RootExceptionType}.")]
     private static partial void LogSessionException(ILogger logger, Guid callId, Guid? conversationId,
         Guid tenantId, Guid locationId, string provider, string providerCallId, Guid correlationId,
         string stage, string safeCode, string exceptionType, string rootExceptionType);
+
+    [LoggerMessage(205, LogLevel.Information,
+        "Realtime inbound turn; CallId={CallId}, CorrelationId={CorrelationId}, TurnId={TurnId}, InboundFrames={InboundFrames}, DurationMs={DurationMs}, SpeechQualified={SpeechQualified}, SttSubmitted={SttSubmitted}, DiscardReason={DiscardReason}.")]
+    private static partial void LogInboundTurn(ILogger logger, Guid callId, Guid correlationId,
+        string turnId, int inboundFrames, double durationMs, bool speechQualified,
+        bool sttSubmitted, string discardReason);
+
+    [LoggerMessage(206, LogLevel.Information,
+        "Realtime outbound response; CallId={CallId}, CorrelationId={CorrelationId}, ResponseId={ResponseId}, SourcePcmBytes={SourcePcmBytes}, SourceSamples={SourceSamples}, ResampledSamples={ResampledSamples}, MuLawBytes={MuLawBytes}, MediaMessageCount={MediaMessageCount}, MarkSent={MarkSent}, Cleared={Cleared}, Canceled={Canceled}.")]
+    private static partial void LogOutboundResponse(ILogger logger, Guid callId, Guid correlationId,
+        string responseId, int sourcePcmBytes, int sourceSamples, int resampledSamples,
+        int muLawBytes, int mediaMessageCount, bool markSent, bool cleared, bool canceled);
 }
 
 public sealed class VoiceSessionConflictException(string code) : Exception("A voice session is already active for this call.")

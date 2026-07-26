@@ -73,7 +73,7 @@ public sealed class FakeRealtimeAudioTransport : IRealtimeAudioTransport
             yield return frame;
     }
 
-    public ValueTask SendAsync(SynthesizedAudioChunk chunk, CancellationToken cancellationToken)
+    public ValueTask<RealtimeAudioSendResult> SendAsync(SynthesizedAudioChunk chunk, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ObjectDisposedException.ThrowIf(disposed, this);
@@ -82,7 +82,11 @@ public sealed class FakeRealtimeAudioTransport : IRealtimeAudioTransport
             if (outbound.Count == MaximumCapturedOutputChunks) outbound.RemoveAt(0);
             outbound.Add(chunk);
         }
-        return ValueTask.CompletedTask;
+        return ValueTask.FromResult(chunk.IsFinal
+            ? new RealtimeAudioSendResult(
+                $"fake-response-{chunk.Sequence}", chunk.Audio.Length,
+                chunk.Audio.Length, chunk.Audio.Length, chunk.Audio.Length, 1, true)
+            : RealtimeAudioSendResult.Pending);
     }
 
     public ValueTask ClearPlaybackAsync(CancellationToken cancellationToken)
