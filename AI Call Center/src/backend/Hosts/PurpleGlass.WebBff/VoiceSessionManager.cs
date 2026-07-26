@@ -42,7 +42,8 @@ public sealed partial class VoiceSessionManager(
             throw new VoiceSessionConflictException("voice_session_already_active");
         }
 
-        LogSessionStarted(logger, call.CallId, call.Provider, call.Direction);
+        LogSessionStarted(logger, call.CallId, call.TenantId, call.LocationId,
+            call.Provider, call.ProviderCallId, call.Direction, call.CorrelationId);
         try
         {
             await session.RunAsync(new VoiceSessionIdentity(
@@ -82,8 +83,9 @@ public sealed partial class VoiceSessionManager(
     private sealed record SessionRegistration(RealtimeVoiceSession Session, string ProviderMediaStreamId);
 
     [LoggerMessage(200, LogLevel.Information,
-        "Voice session started; CallId={CallId}, Provider={Provider}, Direction={Direction}.")]
-    private static partial void LogSessionStarted(ILogger logger, Guid callId, string provider, string direction);
+        "Voice session started; CallId={CallId}, TenantId={TenantId}, LocationId={LocationId}, Provider={Provider}, ProviderCallId={ProviderCallId}, Direction={Direction}, CorrelationId={CorrelationId}.")]
+    private static partial void LogSessionStarted(ILogger logger, Guid callId, Guid tenantId,
+        Guid locationId, string provider, string providerCallId, string direction, Guid correlationId);
 
     [LoggerMessage(201, LogLevel.Information,
         "Voice session ended; CallId={CallId}, Provider={Provider}, State={State}.")]
@@ -94,12 +96,19 @@ public sealed partial class VoiceSessionManager(
     private static partial void LogSessionStopRequested(ILogger logger, Guid callId, string reason);
 }
 
-public sealed class BffVoiceSessionStateSink(RealtimeEventHub realtime) : IVoiceSessionStateSink
+public sealed partial class BffVoiceSessionStateSink(
+    RealtimeEventHub realtime,
+    ILogger<BffVoiceSessionStateSink> logger) : IVoiceSessionStateSink
 {
     public ValueTask PublishAsync(VoiceSessionStateChange change, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (change.State == VoiceSessionState.Ended) return ValueTask.CompletedTask;
+        if (change.State == VoiceSessionState.Failed)
+            LogVoiceFailure(logger, change.Identity.CallId, change.Identity.TenantId,
+                change.Identity.LocationId, change.Identity.Provider,
+                change.Identity.ProviderCallId, change.Identity.CorrelationId,
+                change.SafeCode ?? "voice_session_failed");
         string payload = JsonSerializer.Serialize(new
         {
             callId = change.Identity.CallId,
@@ -117,6 +126,11 @@ public sealed class BffVoiceSessionStateSink(RealtimeEventHub realtime) : IVoice
             Activity.Current?.TraceStateString));
         return ValueTask.CompletedTask;
     }
+
+    [LoggerMessage(203, LogLevel.Warning,
+        "Voice session failed; CallId={CallId}, TenantId={TenantId}, LocationId={LocationId}, Provider={Provider}, ProviderCallId={ProviderCallId}, CorrelationId={CorrelationId}, SafeCode={SafeCode}.")]
+    private static partial void LogVoiceFailure(ILogger logger, Guid callId, Guid tenantId,
+        Guid locationId, string provider, string providerCallId, Guid correlationId, string safeCode);
 }
 
 public sealed class VoiceSessionConflictException(string code) : Exception("A voice session is already active for this call.")

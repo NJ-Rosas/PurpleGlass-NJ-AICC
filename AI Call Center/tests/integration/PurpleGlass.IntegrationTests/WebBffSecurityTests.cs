@@ -106,6 +106,13 @@ public sealed class WebBffSecurityTests : IClassFixture<SecurityWebApplicationFa
 
         Assert.Equal(HttpStatusCode.OK, live.StatusCode);
         Assert.Equal(HttpStatusCode.ServiceUnavailable, ready.StatusCode);
+        using JsonDocument liveBody = JsonDocument.Parse(await live.Content.ReadAsStringAsync());
+        using JsonDocument readyBody = JsonDocument.Parse(await ready.Content.ReadAsStringAsync());
+        Assert.Equal("Healthy", liveBody.RootElement.GetProperty("status").GetString());
+        Assert.Empty(liveBody.RootElement.GetProperty("checks").EnumerateObject());
+        Assert.Equal("Unhealthy", readyBody.RootElement.GetProperty("status").GetString());
+        Assert.Contains(readyBody.RootElement.GetProperty("checks").EnumerateObject(),
+            check => check.Value.GetProperty("status").GetString() == "Unhealthy");
     }
 
     [Fact]

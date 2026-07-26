@@ -73,6 +73,9 @@ public sealed partial class TelephonyTransportWorker(
             }
 
             await calls.CompleteTelephonyDispatchAsync(dispatch.OperationId, providerCallId, error, stoppingToken);
+            LogDispatchCompleted(logger, dispatch.OperationId, dispatch.CallId, dispatch.TenantId,
+                dispatch.LocationId, dispatch.Provider, providerCallId ?? dispatch.ProviderCallId,
+                error ?? "succeeded");
             if (error is not null)
             {
                 activity?.SetStatus(ActivityStatusCode.Error, error);
@@ -87,4 +90,9 @@ public sealed partial class TelephonyTransportWorker(
     [LoggerMessage(EventId = 20, Level = LogLevel.Warning,
         Message = "Telephony operation {OperationId} failed with safe category {ErrorCode}.")]
     private static partial void LogDispatchFailed(ILogger logger, Guid operationId, string errorCode);
+
+    [LoggerMessage(EventId = 21, Level = LogLevel.Information,
+        Message = "Telephony operation completed; OperationId={OperationId}, CallId={CallId}, TenantId={TenantId}, LocationId={LocationId}, Provider={Provider}, ProviderCallId={ProviderCallId}, Result={Result}.")]
+    private static partial void LogDispatchCompleted(ILogger logger, Guid operationId, Guid callId,
+        Guid tenantId, Guid locationId, string provider, string? providerCallId, string result);
 }

@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using PurpleGlass.Application.Abstractions;
 using PurpleGlass.Modules.CallManagement.Application;
@@ -193,8 +194,12 @@ app.UseAuthorization();
 app.UseDefaultFiles();
 app.UseStaticFiles();
 
-app.MapHealthChecks("/health/live", new() { Predicate = _ => false });
-app.MapHealthChecks("/health/ready", new() { Predicate = check => check.Tags.Contains("ready") });
+app.MapHealthChecks("/health/live", new() { Predicate = _ => false, ResponseWriter = WriteHealthResponse });
+app.MapHealthChecks("/health/ready", new()
+{
+    Predicate = check => check.Tags.Contains("ready"),
+    ResponseWriter = WriteHealthResponse,
+});
 
 app.Map("/telephony/twilio/media", async (
     HttpContext httpContext,
@@ -407,10 +412,15 @@ protectedBff.MapGet("/calls", async (TrustedRequestContextAccessor accessor, Cal
 }).RequireAuthorization(SecurityPolicies.ViewCalls);
 protectedBff.MapPost("/calls/outbound", async (OutboundTransportRequest request, HttpContext httpContext,
     IAntiforgery antiforgery, TrustedRequestContextAccessor accessor, CallManagementService calls,
-    SecurityAuditService audit,
+    SecurityAuditService audit, ITelephonyProvider provider, RealtimeVoiceRuntimeStatus voiceRuntime,
     CancellationToken cancellationToken) =>
 {
     await antiforgery.ValidateRequestAsync(httpContext);
+    if (provider.Status.Enabled
+        && provider.Name.Equals("Twilio", StringComparison.OrdinalIgnoreCase)
+        && (!provider.Status.Configured || !voiceRuntime.Ready))
+        throw new CallApplicationException("telephony_runtime_unavailable",
+            "The telephony realtime voice runtime is unavailable.");
     RequestContext context = accessor.Current;
     if (context.AuthorizedLocationIds?.Contains(request.LocationId) != true)
         throw new SecurityBoundaryException("location_access_denied");
@@ -434,8 +444,15 @@ protectedBff.MapPost("/calls/{callId:guid}/hangup", async (Guid callId, HttpCont
     _ = sessions.RequestStop(callId, "purpleglass_hangup");
     return Results.Accepted($"/bff/v1/calls/{callId:D}", call);
 }).RequireAuthorization(SecurityPolicies.InitiateOutbound).RequireRateLimiting("security");
-protectedBff.MapGet("/telephony/status", (ITelephonyProvider provider) =>
-    Results.Ok(new TelephonyConfigurationStatus(provider.Name, provider.Status.Enabled, provider.Status.Configured, provider.Status.State)));
+protectedBff.MapGet("/telephony/status", (ITelephonyProvider provider, RealtimeVoiceRuntimeStatus voiceRuntime) =>
+{
+    TelephonyProviderStatus status = provider.Status;
+    bool requiresRealtimeVoice = status.Enabled
+        && provider.Name.Equals("Twilio", StringComparison.OrdinalIgnoreCase);
+    bool configured = status.Configured && (!requiresRealtimeVoice || voiceRuntime.Ready);
+    string state = requiresRealtimeVoice && status.Configured && !voiceRuntime.Ready ? voiceRuntime.State : status.State;
+    return Results.Ok(new TelephonyConfigurationStatus(provider.Name, status.Enabled, configured, state));
+});
 protectedBff.MapGet("/telephony/numbers", async (TrustedRequestContextAccessor accessor,
     CallManagementService calls, CancellationToken cancellationToken) =>
     Results.Ok(await calls.GetTelephonyNumbersAsync(accessor.Current.TenantId, cancellationToken)))
@@ -560,6 +577,24 @@ static bool Required(IReadOnlyDictionary<string, string> values, string key, out
     return false;
 }
 
+static Task WriteHealthResponse(HttpContext context, HealthReport report)
+{
+    context.Response.ContentType = "application/json";
+    return context.Response.WriteAsJsonAsync(new
+    {
+        status = report.Status.ToString(),
+        checks = report.Entries.ToDictionary(
+            pair => pair.Key,
+            pair => new
+            {
+                status = pair.Value.Status.ToString(),
+                description = pair.Value.Description,
+                data = pair.Value.Data,
+            },
+            StringComparer.Ordinal),
+    }, context.RequestAborted);
+}
+
 static bool AccountSidMatches(IReadOnlyDictionary<string, string> parameters, IConfiguration configuration) =>
     parameters.TryGetValue("AccountSid", out string? received)
     && !string.IsNullOrWhiteSpace(received)
@@ -675,6 +710,7 @@ namespace PurpleGlass.WebBff
                 CallApplicationException { Code: "call_not_found" } => (404, "Resource not found", "resource_not_found"),
                 CallApplicationException { Code: "telephony_route_not_found" or "telephony_location_required" } => (404, "Telephony route not found", "telephony_route_not_found"),
                 CallApplicationException { Code: "telephony_number_unavailable" or "provider_identity_unavailable" } => (409, "Telephony is unavailable", exception is CallApplicationException callException ? callException.Code : "telephony_unavailable"),
+                CallApplicationException { Code: "telephony_runtime_unavailable" } => (503, "Telephony runtime is unavailable", "telephony_runtime_unavailable"),
                 CallApplicationException { Code: "idempotency_conflict" or "call_concurrency_conflict" } => (409, "Call request conflicted", exception is CallApplicationException conflict ? conflict.Code : "call_conflict"),
                 ConversationApplicationException { Code: "conversation_not_found" } => (404, "Resource not found", "resource_not_found"),
                 ArgumentException => (400, "Invalid request", "invalid_request"),

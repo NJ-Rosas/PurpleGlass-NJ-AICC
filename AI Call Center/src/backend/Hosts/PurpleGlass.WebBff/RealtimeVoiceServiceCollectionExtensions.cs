@@ -30,6 +30,8 @@ public static class RealtimeVoiceServiceCollectionExtensions
             },
         };
         options.Validate();
+        services.AddSingleton(RealtimeVoiceRuntimeStatus.From(
+            options.Enabled, speechToText, textToSpeech));
 
         bool realAiEnabled = configuration.GetValue<bool>("Providers:EnableRealAI");
         bool realSpeechEnabled = configuration.GetValue<bool>("Providers:EnableRealSpeech");

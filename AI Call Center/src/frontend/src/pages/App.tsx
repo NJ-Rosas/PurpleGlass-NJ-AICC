@@ -40,7 +40,7 @@ export function App() {
   const [startCall, startCallState] = useStartOutboundCallMutation()
   const [hangupCall, hangupState] = useHangupCallMutation()
   const [voiceStates, setVoiceStates] = useState<VoiceStatesByCall>({})
-  const [view, setView] = useState<'dashboard' | 'dead-letters'>('dashboard')
+  const [view, setView] = useState<'dashboard' | 'calls' | 'settings' | 'dead-letters'>('dashboard')
   const selectedCall = selectedCallId ?? calls[0]?.callId
   const { data: callDetails, isLoading: detailsLoading } = useGetCallDetailsQuery(selectedCall ?? '', {
     skip: !selectedCall,
@@ -97,26 +97,43 @@ export function App() {
   }, [session])
 
   async function login(user: 'administrator' | 'read-only') {
-    await developmentLogin(user).unwrap()
-    await refetchSession()
+    try {
+      await developmentLogin(user).unwrap()
+      await refetchSession()
+    } catch {
+      // RTK Query exposes the failure through loginState for inline feedback.
+    }
   }
 
   async function endSession() {
-    await logout().unwrap()
-    clearCsrfToken()
-    store.dispatch(prototypeApi.util.resetApiState())
+    try {
+      await logout().unwrap()
+      clearCsrfToken()
+      store.dispatch(prototypeApi.util.resetApiState())
+    } catch {
+      reportOperationalFailure('session.logout_failed')
+    }
   }
 
   async function submit(event: FormEvent) {
     event.preventDefault()
     if (!data || !name.trim()) return
-    await updateName({ locationId: data.locationId, displayName: name.trim(), expectedVersion: data.version })
+    try {
+      await updateName({ locationId: data.locationId, displayName: name.trim(), expectedVersion: data.version }).unwrap()
+    } catch {
+      // RTK Query exposes the failure through updateState for inline feedback.
+    }
   }
 
   async function requestCall(destinationNumber: string) {
     if (!data) return
-    const call = await startCall({ locationId: data.locationId, destinationNumber, idempotencyKey: crypto.randomUUID() }).unwrap()
-    setSelectedCallId(call.callId)
+    try {
+      const call = await startCall({ locationId: data.locationId, destinationNumber, idempotencyKey: crypto.randomUUID() }).unwrap()
+      setSelectedCallId(call.callId)
+      setView('calls')
+    } catch {
+      // RTK Query exposes the failure through startCallState for inline feedback.
+    }
   }
 
   if (sessionLoading) return <main className="auth-shell"><section className="panel">Checking your secure session…</section></main>
@@ -139,9 +156,9 @@ export function App() {
         <div className="mark">PG</div>
         <nav aria-label="Primary">
           <button className={view === 'dashboard' ? 'nav-active' : ''} aria-label="Dashboard" onClick={() => setView('dashboard')}>⌂</button>
-          <button aria-label="Calls">☏</button>
+          <button className={view === 'calls' ? 'nav-active' : ''} aria-label="Calls" onClick={() => setView('calls')}>☏</button>
           {session.permissions.includes('operations.deadletters.view') && <button className={view === 'dead-letters' ? 'nav-active' : ''} aria-label="Dead letters" onClick={() => setView('dead-letters')}>!</button>}
-          <button aria-label="Settings">⚙</button>
+          <button className={view === 'settings' ? 'nav-active' : ''} aria-label="Settings" onClick={() => setView('settings')}>⚙</button>
         </nav>
         <button className="avatar" onClick={endSession} aria-label="Log out">{session.displayName.slice(0, 2).toUpperCase()}</button>
       </aside>
@@ -157,7 +174,7 @@ export function App() {
         </header>
 
         {view === 'dead-letters' && <DeadLetterOperations permissions={session.permissions} />}
-        {view === 'dashboard' && isLoading && <section className="panel">Loading the prototype workspace…</section>}
+        {view !== 'dead-letters' && isLoading && <section className="panel">Loading the prototype workspace…</section>}
         {isError && <section className="panel error">The BFF is unavailable. Start the local backend and refresh.</section>}
 
         {view === 'dashboard' && data && <>
@@ -180,7 +197,9 @@ export function App() {
             canInitiate={session.permissions.includes('calls.outbound.initiate')}
             loading={startCallState.isLoading} error={startCallState.isError} onStart={requestCall} />
 
-          <section className="calls-layout">
+          </>}
+
+        {view === 'calls' && data && <section className="calls-layout">
             <div className="panel call-list">
               <div className="section-heading">
                 <div>
@@ -222,9 +241,9 @@ export function App() {
                 hangupLoading={hangupState.isLoading} hangupError={hangupState.isError}
                 onHangup={() => { void hangupCall(callDetails.call.callId) }} />}
             </div>
-          </section>
+          </section>}
 
-          <section className="panel editor">
+        {view === 'settings' && data && <section className="panel editor">
             <div>
               <p className="eyebrow">PROTOTYPE CONTROL</p>
               <h3>Office identity</h3>
@@ -241,8 +260,7 @@ export function App() {
               {updateState.isSuccess && <p className="success">Saved and queued for realtime delivery.</p>}
               {updateState.isError && <p className="error-text">The update conflicted or could not be saved. Refresh and try again.</p>}
             </form>
-          </section>
-        </>}
+          </section>}
       </main>
     </div>
   )

@@ -2,11 +2,52 @@ using PurpleGlass.Adapters.Telephony.Fake;
 using PurpleGlass.Adapters.Telephony.Twilio;
 using PurpleGlass.Modules.CallManagement.Application;
 using PurpleGlass.Modules.CallManagement.Domain;
+using PurpleGlass.WebBff;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 
 namespace PurpleGlass.UnitTests;
 
 public sealed class TelephonyBoundaryTests
 {
+    [Theory]
+    [InlineData(true, "OpenAI", "OpenAI", true, "ready")]
+    [InlineData(true, "Fake", "Fake", false, "voice_media_provider_incompatible")]
+    [InlineData(true, "OpenAI", "Fake", false, "voice_media_provider_incompatible")]
+    [InlineData(false, "OpenAI", "OpenAI", false, "voice_disabled")]
+    public void RealtimeMediaRequiresEnabledPcmCapableSpeechProviders(
+        bool enabled, string recognition, string synthesis, bool expectedReady, string expectedState)
+    {
+        RealtimeVoiceRuntimeStatus status = RealtimeVoiceRuntimeStatus.From(enabled, recognition, synthesis);
+
+        Assert.Equal(expectedReady, status.Ready);
+        Assert.Equal(expectedState, status.State);
+    }
+
+    [Fact]
+    public async Task ReadinessDegradesWhenTwilioUsesSimulatorOnlySpeech()
+    {
+        var check = new TelephonyHealthCheck(
+            new StubProvider("Twilio", new TelephonyProviderStatus(true, true, "configured")),
+            RealtimeVoiceRuntimeStatus.From(true, "Fake", "Fake"));
+
+        HealthCheckResult result = await check.CheckHealthAsync(new HealthCheckContext(), default);
+
+        Assert.Equal(HealthStatus.Degraded, result.Status);
+        Assert.Equal("voice_media_provider_incompatible", result.Data["voiceState"]);
+    }
+
+    [Fact]
+    public async Task ReadinessAcceptsTwilioWithPcmCapableSpeech()
+    {
+        var check = new TelephonyHealthCheck(
+            new StubProvider("Twilio", new TelephonyProviderStatus(true, true, "configured")),
+            RealtimeVoiceRuntimeStatus.From(true, "OpenAI", "OpenAI"));
+
+        HealthCheckResult result = await check.CheckHealthAsync(new HealthCheckContext(), default);
+
+        Assert.Equal(HealthStatus.Healthy, result.Status);
+    }
+
     [Theory]
     [InlineData("+1 (787) 555-1234", "+17875551234")]
     [InlineData(" +442071838750 ", "+442071838750")]
@@ -65,5 +106,15 @@ public sealed class TelephonyBoundaryTests
         });
         Assert.True(verifier.Verify(url, parameters, signature));
         Assert.False(verifier.Verify(url, parameters, "invalid"));
+    }
+
+    private sealed class StubProvider(string name, TelephonyProviderStatus status) : ITelephonyProvider
+    {
+        public string Name { get; } = name;
+        public TelephonyProviderStatus Status { get; } = status;
+        public Task<OutboundCallResult> StartOutboundCallAsync(OutboundCallTransport request, CancellationToken cancellationToken) =>
+            Task.FromResult(OutboundCallResult.Failure("not_used"));
+        public Task<TelephonyProviderResult> HangupCallAsync(string providerCallId, CancellationToken cancellationToken) =>
+            Task.FromResult(TelephonyProviderResult.Failure("not_used"));
     }
 }

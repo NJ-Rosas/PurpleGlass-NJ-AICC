@@ -62,7 +62,16 @@ In the Render Dashboard, set these values on **both** `purpleglass-web` and `pur
 - `Telephony__Twilio__AccountSid=<Twilio Account SID>`
 - `Telephony__Twilio__AuthToken=<Twilio Auth Token>`
 
-Keep `Providers__EnableRealAI=false` and `Providers__EnableRealSpeech=false`. Store the SID and Auth Token only as Render secrets; never place them in the Blueprint, source control, logs, screenshots, or support output. Both services consume the Twilio credentials: the worker submits and updates calls, while the Web BFF verifies signed HTTP and WebSocket callbacks and validates the media Account SID.
+On **`purpleglass-web` only**, configure the realtime speech path used by the Twilio Media Stream:
+
+- `Providers__EnableRealSpeech=true`
+- `SpeechToText__Provider=OpenAI`
+- `TextToSpeech__Provider=OpenAI`
+- `OpenAI__ApiKey=<OpenAI API key>`
+
+`Providers__EnableRealAI` may remain `false` with `LanguageModel__Provider=Fake` for the bounded development conversation, or it may be enabled with `LanguageModel__Provider=OpenAI` when a real language-model conversation is explicitly required. The fake speech adapter is simulator-only: it emits and accepts synthetic text frames and is not compatible with Twilio's 8 kHz media stream. PurpleGlass now reports that combination as `voice_media_provider_incompatible`, marks readiness degraded, disables the dashboard Call action, and rejects direct outbound requests before creating a durable/billable call.
+
+Store the SID, Auth Token, and OpenAI key only as Render secrets; never place them in the Blueprint, source control, logs, screenshots, or support output. Both services consume the Twilio credentials: the worker submits and updates calls, while the Web BFF verifies signed HTTP and WebSocket callbacks and validates the media Account SID. Only the BFF consumes the OpenAI key for speech recognition and synthesis.
 
 There is deliberately no `Telephony__Twilio__FromNumber` setting. PurpleGlass takes the outbound caller ID from its persisted telephony-number assignment for the administrator's tenant and location. Before calling, use the authenticated `PUT /bff/v1/telephony/numbers` administration endpoint to assign the Twilio number in E.164 format with `provider` set to `Twilio`, the selected `locationId`, `outboundEnabled: true`, and `active: true`. Set `inboundEnabled: true` only if inbound routing will also be tested. The request is CSRF-protected and requires the `ManageLocation` permission; do not create the row manually in PostgreSQL.
 
@@ -95,6 +104,38 @@ Initial provisioning does not request unused Twilio/OpenAI inputs. If OpenAI is 
 - Replace HiveMQ Serverless with a paid managed MQTT plan or restore a paid private Mosquitto service with a persistent disk.
 - Add Render Key Value only when PurpleGlass introduces an actual Valkey-backed runtime feature.
 
+## Repeatable cloud smoke test
+
+Run this after each deployment. Use synthetic development data only. The automated phase must not place a phone call.
+
+### Automated/read-only phase
+
+1. Request the public `/` route and confirm HTTP 200 with the PurpleGlass HTML shell.
+2. Request `/health/live`; require HTTP 200. A failure means the web process is not serving traffic.
+3. Request `/health/ready`; require HTTP 200 before testing business work. If it is degraded, inspect the named `postgres`, `telephony`, and `voiceState` health data and stop.
+4. Request the worker's `/health/live` route and confirm HTTP 200, then inspect sanitized worker logs for MQTT subscription and outbox dispatch activity.
+5. Sign in with a synthetic development identity, fetch `/bff/v1/session`, and verify the tenant, active location, authorized locations, role, and permissions are present without secrets.
+6. Load the dashboard and exercise Dashboard, Calls, Dead letters (when authorized), and Settings navigation. Confirm unsupported appointments remain explicitly labeled as awaiting the Open Dental adapter.
+7. In Settings, make a reversible synthetic display-name change through the UI. Confirm the authenticated CSRF-protected request succeeds, the version advances, and the change appears through SSE without a full refresh. Restore the prior synthetic name through the same UI.
+8. Verify a read-only user cannot initiate calls, mutate the location, or inspect operations data. Verify an administrator cannot request data for an unauthorized tenant/location.
+9. Use provider test doubles or the call simulator to create a non-billable call. Confirm `CallSession`, state changes, conversation/transcript/summary where produced, audit records, and outbox records persist through normal APIs and workers.
+10. Confirm duplicate and out-of-order simulated callbacks do not corrupt the final call state, and pending outbox work completes after a worker restart.
+11. Keep the dashboard open while the simulated call changes state. Confirm tenant/location-filtered SSE invalidates Redux call data and the visible state changes without a page refresh; then refresh the browser and confirm the persisted state reloads.
+
+Record HTTP statuses, safe error codes, internal call ID, external synthetic provider ID, state transitions, outbox completion, and timestamps. Do not record cookies, headers containing credentials/signatures, phone numbers, patient data, transcripts, or audio.
+
+### One-call provider-live phase
+
+Run only after the automated phase passes and both services are awake. Confirm `/health/ready` is HTTP 200 and its telephony `voiceState` is `ready`. Use only the configured Twilio test number and verified recipient; place no more than one live call.
+
+1. Submit the outbound request through the administrator dashboard and record the internal call ID and start time.
+2. Confirm the worker persists the Twilio Call SID, the signed answer callback returns XML containing the canonical `wss://<public-host>/telephony/twilio/media` URL, and the signed status callback advances the existing call.
+3. Confirm the media stream remains connected while the conversation is active, audio flows through STT → language model → TTS, and the dashboard updates over SSE.
+4. Hang up once through the dashboard or complete the call normally. Confirm the final call state, failure metadata if applicable, conversation summary/outcome, audit record, and outbox completion persist.
+5. Correlate PurpleGlass and Twilio timestamps. If provider/account policy ends the call, record the Twilio error code and prove PurpleGlass did not request the termination.
+
+Do not retry a live call to diagnose a failure. Inspect the signed callback responses, Twilio Call log, Render logs, persisted safe state, and worker/outbox state first.
+
 ## Troubleshooting
 
 - **Deploy failed:** verify all three MQTT inputs are set and the Render Postgres reference exists. The BFF logs migration failures before web startup.
@@ -103,6 +144,7 @@ Initial provisioning does not request unused Twilio/OpenAI inputs. If OpenAI is 
 - **Worker not processing:** open its `/health/live` URL, wait for cold start, and inspect sanitized logs for MQTT reconnection or database errors.
 - **WebSocket cannot connect:** wake the BFF first, require `wss://`, use the exact canonical host, and keep one BFF instance.
 - **Twilio 403/signature failure:** make `Telephony__PublicBaseUrl` exactly match the external callback origin and verify the Twilio secret values; never disable validation.
+- **Call action disabled with `voice_media_provider_incompatible`:** the BFF is using `Fake` or `Disabled` speech with real Twilio. Configure the BFF's OpenAI speech settings listed above and verify `/health/ready` before trying again. Do not retry a live call while readiness is degraded.
 - **OpenAI unavailable:** verify the provider selectors, safety switches, and `OpenAI__ApiKey`. Fake providers require no key.
 - **Session disappeared:** a BFF restart replaced its ephemeral Data Protection keys; clear stale cookies and sign in again.
 - **Render deployment health failed:** check BFF `/health/live` and sanitized startup logs. After deployment, check `/health/ready`; if it is not healthy, restore the affected operational dependency before an experiment.

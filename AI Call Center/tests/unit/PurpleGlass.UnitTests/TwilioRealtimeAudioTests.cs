@@ -3,6 +3,7 @@ using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
 using PurpleGlass.Adapters.Telephony.Twilio;
+using PurpleGlass.Adapters.Speech.Mock;
 using PurpleGlass.Modules.Conversation.Application;
 
 namespace PurpleGlass.UnitTests;
@@ -13,6 +14,28 @@ public sealed class TwilioRealtimeAudioTests
     private const string OtherAccountSid = "AC99999999999999999999999999999999";
     private const string CallSid = "CA22222222222222222222222222222222";
     private const string StreamSid = "MZ33333333333333333333333333333333";
+
+    [Fact]
+    public async Task SimulatorSpeechIsRejectedBeforeWritingToTwilioMedia()
+    {
+        var synthesizer = new MockSpeechSynthesizer(new MockSpeechOptions(), TimeProvider.System);
+        SpeechSynthesisResult synthesis = await synthesizer.SynthesizeAsync(
+            new SpeechSynthesisRequest(
+                new RuntimeInvocationContext(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(),
+                    Guid.NewGuid(), Guid.NewGuid(), "test-trace"),
+                "Synthetic greeting", "en-US", new VoiceConfiguration("alloy")),
+            default);
+        SynthesizedAudioChunk chunk = Assert.Single(synthesis.AudioChunks!);
+        var socket = InitializedSocket();
+        TwilioRealtimeAudioTransport transport = await InitializeAsync(socket);
+
+        TwilioRealtimeAudioException exception = await Assert.ThrowsAsync<TwilioRealtimeAudioException>(
+            async () => await transport.SendAsync(chunk, default));
+
+        Assert.Equal("provider_media_pcm_unsupported", exception.Code);
+        Assert.Empty(socket.SentTextMessages);
+        await transport.DisposeAsync();
+    }
 
     [Fact]
     public async Task MuLawPcmRoundTripPreservesAudioAndDuplicateSequenceForCoreDeduplication()
