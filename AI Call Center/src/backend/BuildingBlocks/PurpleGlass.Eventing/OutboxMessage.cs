@@ -2,6 +2,11 @@ namespace PurpleGlass.Eventing;
 
 public sealed class OutboxMessage
 {
+    public const string PendingStatus = "Pending";
+    public const string ProcessingStatus = "Processing";
+    public const string PublishedStatus = "Published";
+    public const string DeadLetterStatus = "DeadLetter";
+
     private OutboxMessage()
     {
     }
@@ -34,7 +39,7 @@ public sealed class OutboxMessage
         TraceId = traceId;
         Producer = producer;
         DataClassification = dataClassification;
-        Status = "Pending";
+        Status = PendingStatus;
         CreatedAtUtc = occurredAtUtc;
     }
 
@@ -76,6 +81,10 @@ public sealed class OutboxMessage
 
     public string? LastError { get; private set; }
 
+    public Guid? LeaseId { get; private set; }
+
+    public DateTimeOffset? LeaseExpiresAtUtc { get; private set; }
+
     public static OutboxMessage Create(
         Guid tenantId,
         Guid locationId,
@@ -104,20 +113,72 @@ public sealed class OutboxMessage
             producer,
             dataClassification);
 
-    public void MarkPublished(DateTimeOffset publishedAtUtc)
+    public void Claim(Guid leaseId, DateTimeOffset leaseExpiresAtUtc)
     {
+        if (Status is not PendingStatus and not ProcessingStatus)
+        {
+            throw new InvalidOperationException($"An outbox message in {Status} cannot be claimed.");
+        }
+
+        LeaseId = leaseId;
+        LeaseExpiresAtUtc = leaseExpiresAtUtc;
+        Status = ProcessingStatus;
+    }
+
+    public void MarkPublished(Guid leaseId, DateTimeOffset publishedAtUtc)
+    {
+        EnsureLease(leaseId);
         PublishedAtUtc = publishedAtUtc;
-        Status = "Published";
+        Status = PublishedStatus;
         NextAttemptAtUtc = null;
         LastError = null;
         Attempts++;
+        ClearLease();
     }
 
-    public void MarkFailed(string error, DateTimeOffset? nextAttemptAtUtc = null)
+    public void MarkFailed(
+        Guid leaseId,
+        string error,
+        DateTimeOffset failedAtUtc,
+        int maximumAttempts,
+        TimeSpan initialRetryDelay,
+        TimeSpan maximumRetryDelay)
     {
+        EnsureLease(leaseId);
+        ArgumentOutOfRangeException.ThrowIfLessThan(maximumAttempts, 1);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(initialRetryDelay, TimeSpan.Zero);
+        ArgumentOutOfRangeException.ThrowIfLessThan(maximumRetryDelay, initialRetryDelay);
+
         LastError = error[..Math.Min(error.Length, 1_000)];
         Attempts++;
-        Status = "Pending";
-        NextAttemptAtUtc = nextAttemptAtUtc;
+        if (Attempts >= maximumAttempts)
+        {
+            Status = DeadLetterStatus;
+            NextAttemptAtUtc = null;
+        }
+        else
+        {
+            double delaySeconds = Math.Min(
+                maximumRetryDelay.TotalSeconds,
+                initialRetryDelay.TotalSeconds * Math.Pow(2, Attempts - 1));
+            Status = PendingStatus;
+            NextAttemptAtUtc = failedAtUtc.AddSeconds(delaySeconds);
+        }
+
+        ClearLease();
+    }
+
+    private void EnsureLease(Guid leaseId)
+    {
+        if (Status != ProcessingStatus || LeaseId != leaseId)
+        {
+            throw new InvalidOperationException("The outbox message is not owned by the supplied lease.");
+        }
+    }
+
+    private void ClearLease()
+    {
+        LeaseId = null;
+        LeaseExpiresAtUtc = null;
     }
 }

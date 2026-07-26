@@ -1,9 +1,9 @@
 using System.Text;
-using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using MQTTnet;
 using MQTTnet.Protocol;
 using PurpleGlass.Eventing;
-using PurpleGlass.Modules.Tenancy.Infrastructure;
+using PurpleGlass.Eventing.Infrastructure;
 
 namespace PurpleGlass.Integrations.Worker;
 
@@ -11,8 +11,11 @@ public sealed partial class Worker(
     IServiceScopeFactory scopeFactory,
     IConfiguration configuration,
     TimeProvider timeProvider,
+    IOptions<OutboxPublisherOptions> publisherOptions,
     ILogger<Worker> logger) : BackgroundService
 {
+    private readonly OutboxPublisherOptions settings = Validate(publisherOptions.Value);
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         string host = configuration["Mqtt:Host"] ?? "localhost";
@@ -20,7 +23,7 @@ public sealed partial class Worker(
         var factory = new MqttClientFactory();
         using IMqttClient client = factory.CreateMqttClient();
         var options = new MqttClientOptionsBuilder()
-            .WithClientId($"purpleglass-outbox-{Environment.MachineName}")
+            .WithClientId($"purpleglass-outbox-{Environment.MachineName}-{Environment.ProcessId}")
             .WithTcpServer(host, port)
             .WithCleanSession()
             .Build();
@@ -39,21 +42,26 @@ public sealed partial class Worker(
             catch (Exception exception) when (exception is not OperationCanceledException)
             {
                 LogPublisherCycleFailure(logger, exception);
+                await Task.Delay(settings.FailureRetryDelay, timeProvider, stoppingToken);
+                continue;
             }
 
-            await Task.Delay(TimeSpan.FromSeconds(1), timeProvider, stoppingToken);
+            await Task.Delay(settings.PollInterval, timeProvider, stoppingToken);
         }
     }
 
     private async Task PublishBatchAsync(IMqttClient client, CancellationToken cancellationToken)
     {
         await using AsyncServiceScope scope = scopeFactory.CreateAsyncScope();
-        TenancyDbContext dbContext = scope.ServiceProvider.GetRequiredService<TenancyDbContext>();
-        List<OutboxMessage> messages = await dbContext.OutboxMessages
-            .Where(message => message.PublishedAtUtc == null && message.Attempts < 10)
-            .OrderBy(message => message.OccurredAtUtc)
-            .Take(20)
-            .ToListAsync(cancellationToken);
+        OutboxDispatcherStore store = scope.ServiceProvider.GetRequiredService<OutboxDispatcherStore>();
+        Guid leaseId = Guid.NewGuid();
+        DateTimeOffset now = timeProvider.GetUtcNow();
+        IReadOnlyList<OutboxMessage> messages = await store.ClaimBatchAsync(
+            leaseId,
+            now,
+            settings.LeaseDuration,
+            settings.BatchSize,
+            cancellationToken);
 
         foreach (OutboxMessage message in messages)
         {
@@ -67,16 +75,36 @@ public sealed partial class Worker(
                     .Build();
 
                 _ = await client.PublishAsync(mqttMessage, cancellationToken);
-                message.MarkPublished(timeProvider.GetUtcNow());
+                await store.MarkPublishedAsync(
+                    message,
+                    leaseId,
+                    timeProvider.GetUtcNow(),
+                    cancellationToken);
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
             {
-                message.MarkFailed(exception.Message);
+                await store.MarkFailedAsync(
+                    message,
+                    leaseId,
+                    exception.Message,
+                    timeProvider.GetUtcNow(),
+                    settings.MaximumAttempts,
+                    settings.InitialRetryDelay,
+                    settings.MaximumRetryDelay,
+                    cancellationToken);
                 LogMessagePublishFailure(logger, message.Id, exception);
+                if (message.Status == OutboxMessage.DeadLetterStatus)
+                {
+                    LogMessageDeadLettered(logger, message.Id, message.Attempts);
+                }
             }
-
-            _ = await dbContext.SaveChangesAsync(cancellationToken);
         }
+    }
+
+    private static OutboxPublisherOptions Validate(OutboxPublisherOptions options)
+    {
+        options.Validate();
+        return options;
     }
 
     [LoggerMessage(EventId = 1, Level = LogLevel.Error, Message = "The outbox publisher cycle failed.")]
@@ -84,4 +112,7 @@ public sealed partial class Worker(
 
     [LoggerMessage(EventId = 2, Level = LogLevel.Warning, Message = "Publishing outbox message {OutboxMessageId} failed.")]
     private static partial void LogMessagePublishFailure(ILogger logger, Guid outboxMessageId, Exception exception);
+
+    [LoggerMessage(EventId = 3, Level = LogLevel.Error, Message = "Outbox message {OutboxMessageId} moved to dead letter after {Attempts} attempts.")]
+    private static partial void LogMessageDeadLettered(ILogger logger, Guid outboxMessageId, int attempts);
 }
