@@ -17,6 +17,8 @@
     <ProjectReference Include="..\..\Modules\Tenancy\Contracts\PurpleGlass.Modules.Tenancy.Contracts.csproj" />
     <ProjectReference Include="..\..\Modules\Tenancy\Infrastructure\PurpleGlass.Modules.Tenancy.Infrastructure.csproj" />
     <ProjectReference Include="..\..\Modules\Tenancy\Presentation\PurpleGlass.Modules.Tenancy.Presentation.csproj" />
+    <ProjectReference Include="..\..\Adapters\Telephony\PurpleGlass.Adapters.Telephony.Fake\PurpleGlass.Adapters.Telephony.Fake.csproj" />
+    <ProjectReference Include="..\..\Adapters\Telephony\PurpleGlass.Adapters.Telephony.Twilio\PurpleGlass.Adapters.Telephony.Twilio.csproj" />
   </ItemGroup>
 
   <ItemGroup>

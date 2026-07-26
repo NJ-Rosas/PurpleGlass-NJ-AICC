@@ -10,6 +10,8 @@ using PurpleGlass.Eventing;
 using PurpleGlass.Eventing.Infrastructure;
 using PurpleGlass.Modules.Tenancy.Infrastructure;
 using PurpleGlass.WebBff;
+using PurpleGlass.Modules.CallManagement.Application;
+using PurpleGlass.Modules.CallManagement.Infrastructure;
 
 namespace PurpleGlass.IntegrationTests;
 
@@ -129,6 +131,69 @@ public sealed class WebBffSecurityTests : IClassFixture<SecurityWebApplicationFa
     {
         using HttpClient client = factory.CreateClient();
         Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/bff/v1/events")).StatusCode);
+    }
+
+    [Fact]
+    public async Task AdministratorOutboundRequestUsesCsrfScopeAuditAndDurableIntent()
+    {
+        using (IServiceScope scope = factory.Services.CreateScope())
+        {
+            CallManagementService calls = scope.ServiceProvider.GetRequiredService<CallManagementService>();
+            _ = await calls.ConfigureTelephonyNumberAsync(new ConfigureTelephonyNumber(
+                DevelopmentIdentityDirectory.TenantId, DevelopmentIdentityDirectory.LocationId,
+                "None", "+17875551300", null, false, true, true), default);
+        }
+        using HttpClient client = factory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true });
+        await LoginAsync(client, "administrator");
+        string csrf = await GetCsrfAsync(client);
+        string idempotencyKey = $"bff-transport-{Guid.NewGuid():N}";
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/bff/v1/calls/outbound")
+        {
+            Content = JsonContent.Create(new
+            {
+                locationId = DevelopmentIdentityDirectory.LocationId,
+                idempotencyKey,
+                destinationNumber = "+17875551301",
+            }),
+        };
+        request.Headers.Add("X-CSRF-TOKEN", csrf);
+        HttpResponseMessage response = await client.SendAsync(request);
+        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+        using IServiceScope verificationScope = factory.Services.CreateScope();
+        CallManagementDbContext callsDb = verificationScope.ServiceProvider.GetRequiredService<CallManagementDbContext>();
+        Assert.True(await callsDb.TelephonyOperations.AnyAsync(operation => operation.TenantId
+            == new PurpleGlass.Modules.CallManagement.Domain.TenantId(DevelopmentIdentityDirectory.TenantId)));
+        TenancyDbContext tenancy = verificationScope.ServiceProvider.GetRequiredService<TenancyDbContext>();
+        Assert.True(await tenancy.AuditRecords.AnyAsync(record => record.Action == "OutboundCallRequested"));
+    }
+
+    [Fact]
+    public async Task AdministratorHangupCreatesOneDurableOperation()
+    {
+        Guid callId;
+        using (IServiceScope scope = factory.Services.CreateScope())
+        {
+            CallManagementService calls = scope.ServiceProvider.GetRequiredService<CallManagementService>();
+            var call = await calls.RegisterInboundAsync(new RegisterInboundCall(
+                DevelopmentIdentityDirectory.TenantId, DevelopmentIdentityDirectory.LocationId,
+                $"FA-{Guid.NewGuid():N}", "+17875551301", "+17875551300", Guid.NewGuid(), Provider: "Fake"), default);
+            callId = call.CallId;
+        }
+        using HttpClient client = factory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true });
+        await LoginAsync(client, "administrator");
+        string csrf = await GetCsrfAsync(client);
+        using var first = new HttpRequestMessage(HttpMethod.Post, $"/bff/v1/calls/{callId:D}/hangup");
+        first.Headers.Add("X-CSRF-TOKEN", csrf);
+        Assert.Equal(HttpStatusCode.Accepted, (await client.SendAsync(first)).StatusCode);
+        csrf = await GetCsrfAsync(client);
+        using var replay = new HttpRequestMessage(HttpMethod.Post, $"/bff/v1/calls/{callId:D}/hangup");
+        replay.Headers.Add("X-CSRF-TOKEN", csrf);
+        Assert.Equal(HttpStatusCode.Accepted, (await client.SendAsync(replay)).StatusCode);
+        using IServiceScope verificationScope = factory.Services.CreateScope();
+        CallManagementDbContext db = verificationScope.ServiceProvider.GetRequiredService<CallManagementDbContext>();
+        Assert.Equal(1, await db.TelephonyOperations.CountAsync(operation => operation.CallId
+            == new PurpleGlass.Modules.CallManagement.Domain.CallSessionId(callId)
+            && operation.Type == PurpleGlass.Modules.CallManagement.Domain.TelephonyOperationType.Hangup));
     }
 
     [Fact]

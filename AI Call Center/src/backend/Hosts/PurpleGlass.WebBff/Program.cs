@@ -23,6 +23,11 @@ using PurpleGlass.Observability;
 using PurpleGlass.Eventing.Infrastructure;
 using System.Text.Json;
 using System.Threading.RateLimiting;
+using System.Diagnostics;
+using System.Security;
+using PurpleGlass.Adapters.Telephony.Fake;
+using PurpleGlass.Adapters.Telephony.Twilio;
+using PurpleGlass.Modules.CallManagement.Contracts;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddPurpleGlassObservability(builder.Configuration, "PurpleGlass.WebBff", builder.Environment.EnvironmentName);
@@ -107,10 +112,18 @@ builder.Services.AddRateLimiter(options =>
         WriteSecurityError(context.HttpContext.Response, 429, "rate_limit_exceeded"));
     options.AddPolicy("security", context => RateLimitPartition.GetFixedWindowLimiter(
         context.User.FindFirstValue(ClaimTypes.NameIdentifier) ?? context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
-        _ => new FixedWindowRateLimiterOptions { PermitLimit = 30, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
+        _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = builder.Environment.IsDevelopment() ? 300 : 30,
+            Window = TimeSpan.FromMinutes(1),
+            QueueLimit = 0,
+        }));
     options.AddPolicy("sse", context => RateLimitPartition.GetConcurrencyLimiter(
         context.User.FindFirstValue(ClaimTypes.NameIdentifier) ?? context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
         _ => new ConcurrencyLimiterOptions { PermitLimit = 3, QueueLimit = 0 }));
+    options.AddPolicy("telephony-webhook", context => RateLimitPartition.GetFixedWindowLimiter(
+        context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+        _ => new FixedWindowRateLimiterOptions { PermitLimit = 120, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
 });
 
 if (builder.Environment.IsDevelopment() && security.DevelopmentOrigins.Length > 0)
@@ -126,9 +139,37 @@ builder.Services.AddScoped<TenancyService>();
 builder.Services.AddCallManagementInfrastructure(connectionString);
 builder.Services.AddConversationInfrastructure(connectionString);
 builder.Services.AddEventingInfrastructure(connectionString);
+string telephonyProvider = builder.Configuration["Telephony:Provider"] ?? "None";
+bool realTelephonyEnabled = builder.Configuration.GetValue<bool>("Providers:EnableRealTelephony");
+if (realTelephonyEnabled && telephonyProvider.Equals("Twilio", StringComparison.OrdinalIgnoreCase))
+{
+    var twilioOptions = new TwilioTelephonyOptions
+    {
+        AccountSid = builder.Configuration["Telephony:Twilio:AccountSid"] ?? string.Empty,
+        AuthToken = builder.Configuration["Telephony:Twilio:AuthToken"] ?? string.Empty,
+        PublicBaseUrl = builder.Configuration["Telephony:PublicBaseUrl"] ?? string.Empty,
+    };
+    builder.Services.AddSingleton(twilioOptions);
+    builder.Services.AddSingleton<ITelephonyProvider, TwilioTelephonyProvider>();
+    builder.Services.AddSingleton<ITelephonyWebhookVerifier, TwilioWebhookVerifier>();
+}
+else if (builder.Environment.IsDevelopment() && telephonyProvider.Equals("Fake", StringComparison.OrdinalIgnoreCase))
+{
+    builder.Services.AddSingleton<FakeTelephonyProvider>();
+    builder.Services.AddSingleton<ITelephonyProvider>(service => service.GetRequiredService<FakeTelephonyProvider>());
+    builder.Services.AddSingleton<ITelephonyWebhookVerifier>(service => service.GetRequiredService<FakeTelephonyProvider>());
+}
+else
+{
+    builder.Services.AddSingleton<DisabledTelephonyProvider>();
+    builder.Services.AddSingleton<ITelephonyProvider>(service => service.GetRequiredService<DisabledTelephonyProvider>());
+    builder.Services.AddSingleton<ITelephonyWebhookVerifier>(service => service.GetRequiredService<DisabledTelephonyProvider>());
+}
 builder.Services.AddSingleton<RealtimeEventHub>();
 builder.Services.AddHostedService<MqttRealtimeSubscriber>();
-builder.Services.AddHealthChecks().AddCheck<DatabaseHealthCheck>("postgres", tags: ["ready"]);
+builder.Services.AddHealthChecks()
+    .AddCheck<DatabaseHealthCheck>("postgres", tags: ["ready"])
+    .AddCheck<TelephonyHealthCheck>("telephony", tags: ["ready"]);
 builder.Services.AddExceptionHandler<SecurityExceptionHandler>();
 builder.Services.AddProblemDetails();
 
@@ -144,6 +185,68 @@ app.UseAuthorization();
 
 app.MapHealthChecks("/health/live", new() { Predicate = _ => false });
 app.MapHealthChecks("/health/ready", new() { Predicate = check => check.Tags.Contains("ready") });
+
+app.MapPost("/telephony/twilio/inbound", async (HttpContext httpContext,
+    ITelephonyWebhookVerifier verifier, CallManagementService calls, CancellationToken cancellationToken) =>
+{
+    if (!httpContext.Request.HasFormContentType)
+        return Results.Problem(statusCode: 400, title: "Invalid provider request", extensions: new Dictionary<string, object?> { ["code"] = "provider_content_type_invalid" });
+    IFormCollection form = await httpContext.Request.ReadFormAsync(cancellationToken);
+    Dictionary<string, string> parameters = FormValues(form);
+    if (!VerifyTelephonyRequest(httpContext, verifier, builder.Configuration, parameters))
+        return Results.Problem(statusCode: 403, title: "Provider request rejected", extensions: new Dictionary<string, object?> { ["code"] = "invalid_provider_signature" });
+    if (!Required(parameters, "AccountSid", out _)
+        || !Required(parameters, "CallSid", out string callSid)
+        || !Required(parameters, "From", out string from)
+        || !Required(parameters, "To", out string to))
+        return Results.Problem(statusCode: 400, title: "Invalid provider request", extensions: new Dictionary<string, object?> { ["code"] = "provider_metadata_missing" });
+
+    using Activity? activity = PurpleGlassTelemetry.Integrations.StartActivity("telephony.inbound.receive", ActivityKind.Consumer);
+    Guid correlationId = Guid.NewGuid();
+    activity?.SetTag("purpleglass.correlation_id", correlationId);
+    _ = await calls.RegisterInboundTransportAsync("Twilio", callSid,
+        parameters.GetValueOrDefault("ParentCallSid"), from, to, correlationId, cancellationToken);
+    PurpleGlassTelemetry.TelephonyInboundCalls.Add(1, new KeyValuePair<string, object?>("provider", "Twilio"));
+    string message = builder.Configuration["Telephony:InboundMessage"]
+        ?? "Thank you for calling. PurpleGlass call transport is connected.";
+    return Results.Text($"<?xml version=\"1.0\" encoding=\"UTF-8\"?><Response><Say>{SecurityElement.Escape(message)}</Say></Response>", "application/xml");
+}).RequireRateLimiting("telephony-webhook");
+
+app.MapPost("/telephony/twilio/answer", async (HttpContext httpContext, ITelephonyWebhookVerifier verifier,
+    CancellationToken cancellationToken) =>
+{
+    if (!httpContext.Request.HasFormContentType)
+        return Results.Problem(statusCode: 400, title: "Invalid provider request", extensions: new Dictionary<string, object?> { ["code"] = "provider_content_type_invalid" });
+    IFormCollection form = await httpContext.Request.ReadFormAsync(cancellationToken);
+    Dictionary<string, string> parameters = FormValues(form);
+    if (!VerifyTelephonyRequest(httpContext, verifier, builder.Configuration, parameters))
+        return Results.Problem(statusCode: 403, title: "Provider request rejected", extensions: new Dictionary<string, object?> { ["code"] = "invalid_provider_signature" });
+    string message = builder.Configuration["Telephony:OutboundMessage"]
+        ?? "PurpleGlass call transport is connected.";
+    return Results.Text($"<?xml version=\"1.0\" encoding=\"UTF-8\"?><Response><Say>{SecurityElement.Escape(message)}</Say></Response>", "application/xml");
+}).RequireRateLimiting("telephony-webhook");
+
+app.MapPost("/telephony/twilio/status", async (Guid? operationId, HttpContext httpContext,
+    ITelephonyWebhookVerifier verifier, CallManagementService calls, CancellationToken cancellationToken) =>
+{
+    if (!httpContext.Request.HasFormContentType)
+        return Results.Problem(statusCode: 400, title: "Invalid provider request", extensions: new Dictionary<string, object?> { ["code"] = "provider_content_type_invalid" });
+    IFormCollection form = await httpContext.Request.ReadFormAsync(cancellationToken);
+    Dictionary<string, string> parameters = FormValues(form);
+    PurpleGlassTelemetry.TelephonyWebhooksReceived.Add(1, new KeyValuePair<string, object?>("provider", "Twilio"));
+    if (!VerifyTelephonyRequest(httpContext, verifier, builder.Configuration, parameters))
+        return Results.Problem(statusCode: 403, title: "Provider request rejected", extensions: new Dictionary<string, object?> { ["code"] = "invalid_provider_signature" });
+    if (!Required(parameters, "AccountSid", out _)
+        || !Required(parameters, "CallSid", out string callSid) || !Required(parameters, "CallStatus", out string status))
+        return Results.Problem(statusCode: 400, title: "Invalid provider request", extensions: new Dictionary<string, object?> { ["code"] = "provider_metadata_missing" });
+    if (operationId.HasValue) await calls.ReconcileProviderIdentityAsync(operationId.Value, "Twilio", callSid, cancellationToken);
+    string eventId = httpContext.Request.Headers["I-Twilio-Idempotency-Token"].FirstOrDefault()
+        ?? $"{callSid}:{status.ToLowerInvariant()}";
+    _ = await calls.ApplyProviderStatusAsync(new ApplyProviderCallStatus("Twilio", callSid, status, eventId), cancellationToken);
+    if (status.Equals("in-progress", StringComparison.OrdinalIgnoreCase)) PurpleGlassTelemetry.TelephonyCallsConnected.Add(1);
+    if (status is "failed" or "busy" or "no-answer" or "canceled") PurpleGlassTelemetry.TelephonyCallsFailed.Add(1);
+    return Results.NoContent();
+}).RequireRateLimiting("telephony-webhook");
 
 RouteGroupBuilder bff = app.MapGroup("/bff/v1");
 
@@ -225,19 +328,55 @@ protectedBff.MapGet("/calls", async (TrustedRequestContextAccessor accessor, Cal
     return Results.Ok(await calls.GetRecentAsync(context.TenantId, context.LocationId,
         Math.Clamp(limit ?? 20, 1, 50), cancellationToken));
 }).RequireAuthorization(SecurityPolicies.ViewCalls);
-protectedBff.MapPost("/calls/outbound", async (SyntheticOutboundCallRequest request, HttpContext httpContext,
+protectedBff.MapPost("/calls/outbound", async (OutboundTransportRequest request, HttpContext httpContext,
     IAntiforgery antiforgery, TrustedRequestContextAccessor accessor, CallManagementService calls,
+    SecurityAuditService audit,
     CancellationToken cancellationToken) =>
 {
     await antiforgery.ValidateRequestAsync(httpContext);
-    if (!request.FromNumber.StartsWith("+1555", StringComparison.Ordinal)
-        || !request.ToNumber.StartsWith("+1555", StringComparison.Ordinal))
-        throw new ArgumentException("Only reserved synthetic phone numbers are accepted.");
     RequestContext context = accessor.Current;
-    return Results.Ok(await calls.RequestOutboundAsync(new RequestOutboundCall(
-        context.TenantId, context.LocationId, request.IdempotencyKey,
-        request.FromNumber, request.ToNumber, context.CorrelationId), cancellationToken));
+    if (context.AuthorizedLocationIds?.Contains(request.LocationId) != true)
+        throw new SecurityBoundaryException("location_access_denied");
+    CallSummary call = await calls.RequestTransportOutboundAsync(new RequestTransportOutboundCall(
+        context.TenantId, request.LocationId, request.IdempotencyKey,
+        request.DestinationNumber, context.CorrelationId), cancellationToken);
+    await audit.WriteAsync(context.TenantId, request.LocationId, context.ActorId, "OutboundCallRequested",
+        "CallSession", call.CallId.ToString("D"), "Allowed", "telephony_transport", context.CorrelationId, cancellationToken);
+    return Results.Accepted($"/bff/v1/calls/{call.CallId:D}", call);
 }).RequireAuthorization(SecurityPolicies.InitiateOutbound).RequireRateLimiting("security");
+protectedBff.MapPost("/calls/{callId:guid}/hangup", async (Guid callId, HttpContext httpContext,
+    IAntiforgery antiforgery, TrustedRequestContextAccessor accessor, CallManagementService calls,
+    SecurityAuditService audit, CancellationToken cancellationToken) =>
+{
+    await antiforgery.ValidateRequestAsync(httpContext);
+    RequestContext context = accessor.Current;
+    CallSummary call = await calls.RequestHangupAsync(new RequestCallHangup(
+        context.TenantId, context.LocationId, callId), cancellationToken);
+    await audit.WriteAsync(context.TenantId, context.LocationId, context.ActorId, "CallHangupRequested",
+        "CallSession", callId.ToString("D"), "Allowed", "telephony_transport", context.CorrelationId, cancellationToken);
+    return Results.Accepted($"/bff/v1/calls/{callId:D}", call);
+}).RequireAuthorization(SecurityPolicies.InitiateOutbound).RequireRateLimiting("security");
+protectedBff.MapGet("/telephony/status", (ITelephonyProvider provider) =>
+    Results.Ok(new TelephonyConfigurationStatus(provider.Name, provider.Status.Enabled, provider.Status.Configured, provider.Status.State)));
+protectedBff.MapGet("/telephony/numbers", async (TrustedRequestContextAccessor accessor,
+    CallManagementService calls, CancellationToken cancellationToken) =>
+    Results.Ok(await calls.GetTelephonyNumbersAsync(accessor.Current.TenantId, cancellationToken)))
+    .RequireAuthorization(SecurityPolicies.ManageLocation);
+protectedBff.MapPut("/telephony/numbers", async (TelephonyNumberRequest request, HttpContext httpContext,
+    IAntiforgery antiforgery, TrustedRequestContextAccessor accessor, CallManagementService calls,
+    SecurityAuditService audit, CancellationToken cancellationToken) =>
+{
+    await antiforgery.ValidateRequestAsync(httpContext);
+    RequestContext context = accessor.Current;
+    if (request.LocationId.HasValue && context.AuthorizedLocationIds?.Contains(request.LocationId.Value) != true)
+        throw new SecurityBoundaryException("location_access_denied");
+    TelephonyNumberSummary number = await calls.ConfigureTelephonyNumberAsync(new ConfigureTelephonyNumber(
+        context.TenantId, request.LocationId, request.Provider, request.Number, request.ProviderNumberId,
+        request.InboundEnabled, request.OutboundEnabled, request.Active), cancellationToken);
+    await audit.WriteAsync(context.TenantId, request.LocationId ?? context.LocationId, context.ActorId, "TelephonyNumberConfigured",
+        "TelephonyNumber", number.Id.ToString("D"), "Allowed", "configuration_changed", context.CorrelationId, cancellationToken);
+    return Results.Ok(number);
+}).RequireAuthorization(SecurityPolicies.ManageLocation).RequireRateLimiting("security");
 protectedBff.MapGet("/calls/{callId:guid}", async (
     Guid callId, TrustedRequestContextAccessor accessor, CallManagementService calls,
     ConversationService conversations, CancellationToken cancellationToken) =>
@@ -328,12 +467,40 @@ static Task WriteSecurityError(HttpResponse response, int status, string code)
     return response.WriteAsJsonAsync(new ProblemDetails { Status = status, Title = "Security request rejected", Extensions = { ["code"] = code } });
 }
 
+static Dictionary<string, string> FormValues(IFormCollection form) =>
+    form.ToDictionary(pair => pair.Key, pair => pair.Value.ToString(), StringComparer.Ordinal);
+
+static bool Required(IReadOnlyDictionary<string, string> values, string key, out string value)
+{
+    if (values.TryGetValue(key, out string? found) && !string.IsNullOrWhiteSpace(found))
+    {
+        value = found;
+        return true;
+    }
+    value = string.Empty;
+    return false;
+}
+
+static bool VerifyTelephonyRequest(HttpContext context, ITelephonyWebhookVerifier verifier,
+    IConfiguration configuration, IReadOnlyDictionary<string, string> parameters)
+{
+    string? signature = context.Request.Headers["X-Twilio-Signature"].FirstOrDefault();
+    string configuredBase = configuration["Telephony:PublicBaseUrl"] ?? string.Empty;
+    string url = Uri.TryCreate(configuredBase, UriKind.Absolute, out Uri? baseUri)
+        ? new Uri(baseUri, context.Request.Path + context.Request.QueryString).ToString()
+        : $"{context.Request.Scheme}://{context.Request.Host}{context.Request.PathBase}{context.Request.Path}{context.Request.QueryString}";
+    bool valid = verifier.Provider.Equals("Twilio", StringComparison.OrdinalIgnoreCase)
+        && verifier.Verify(url, parameters, signature ?? string.Empty);
+    if (!valid) PurpleGlassTelemetry.TelephonyWebhooksInvalid.Add(1, new KeyValuePair<string, object?>("provider", "Twilio"));
+    return valid;
+}
+
 public partial class Program;
 
 namespace PurpleGlass.WebBff
 {
     public sealed record DevelopmentLoginRequest(string User);
-    public sealed record SyntheticOutboundCallRequest(string IdempotencyKey, string FromNumber, string ToNumber);
+    public sealed record OutboundTransportRequest(Guid LocationId, string IdempotencyKey, string DestinationNumber);
     public sealed record DeadLetterListRequest(
         Guid? LocationId, string? MessageType, string? FailureCategory,
         DateTimeOffset? FromUtc, DateTimeOffset? ToUtc, Guid? MessageId,
@@ -362,6 +529,9 @@ namespace PurpleGlass.WebBff
                 TenancyResourceNotFoundException => (404, "Resource not found", "resource_not_found"),
                 TenancyConcurrencyException => (409, "Resource changed", "concurrency_conflict"),
                 CallApplicationException { Code: "call_not_found" } => (404, "Resource not found", "resource_not_found"),
+                CallApplicationException { Code: "telephony_route_not_found" or "telephony_location_required" } => (404, "Telephony route not found", "telephony_route_not_found"),
+                CallApplicationException { Code: "telephony_number_unavailable" or "provider_identity_unavailable" } => (409, "Telephony is unavailable", exception is CallApplicationException callException ? callException.Code : "telephony_unavailable"),
+                CallApplicationException { Code: "idempotency_conflict" or "call_concurrency_conflict" } => (409, "Call request conflicted", exception is CallApplicationException conflict ? conflict.Code : "call_conflict"),
                 ConversationApplicationException { Code: "conversation_not_found" } => (404, "Resource not found", "resource_not_found"),
                 ArgumentException => (400, "Invalid request", "invalid_request"),
                 _ => (500, "An unexpected error occurred", "unexpected_error")

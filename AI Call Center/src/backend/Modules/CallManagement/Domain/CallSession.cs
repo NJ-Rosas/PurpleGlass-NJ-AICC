@@ -11,6 +11,7 @@ public sealed class CallSession
         TenantId tenantId,
         LocationId locationId,
         CallDirection direction,
+        string provider,
         string? providerCallId,
         string fromNumber,
         string toNumber,
@@ -31,6 +32,7 @@ public sealed class CallSession
         TenantId = tenantId;
         LocationId = locationId;
         Direction = direction;
+        Provider = RequireValue(provider, nameof(provider), 50);
         ProviderCallId = direction == CallDirection.Inbound
             ? RequireValue(providerCallId ?? string.Empty, nameof(providerCallId), 200)
             : NormalizeOptional(providerCallId, nameof(providerCallId), 200);
@@ -53,6 +55,10 @@ public sealed class CallSession
     public CallState State { get; private set; }
 
     public string? ProviderCallId { get; private set; }
+
+    public string Provider { get; private set; } = string.Empty;
+
+    public string? ProviderParentCallId { get; private set; }
 
     public string FromNumber { get; private set; } = string.Empty;
 
@@ -96,8 +102,9 @@ public sealed class CallSession
         string fromNumber,
         string toNumber,
         Guid correlationId,
-        DateTimeOffset receivedAtUtc) =>
-        new(id, tenantId, locationId, CallDirection.Inbound, providerCallId, fromNumber, toNumber, correlationId, receivedAtUtc);
+        DateTimeOffset receivedAtUtc,
+        string provider = "Synthetic") =>
+        new(id, tenantId, locationId, CallDirection.Inbound, provider, providerCallId, fromNumber, toNumber, correlationId, receivedAtUtc);
 
     public static CallSession RequestOutbound(
         CallSessionId id,
@@ -107,8 +114,24 @@ public sealed class CallSession
         string fromNumber,
         string toNumber,
         Guid correlationId,
-        DateTimeOffset requestedAtUtc) =>
-        new(id, tenantId, locationId, CallDirection.Outbound, providerCallId, fromNumber, toNumber, correlationId, requestedAtUtc);
+        DateTimeOffset requestedAtUtc,
+        string provider = "Synthetic") =>
+        new(id, tenantId, locationId, CallDirection.Outbound, provider, providerCallId, fromNumber, toNumber, correlationId, requestedAtUtc);
+
+    public void AssignProviderIdentity(string providerCallId, string? providerParentCallId = null)
+    {
+        string normalized = RequireValue(providerCallId, nameof(providerCallId), 200);
+        if (ProviderCallId is not null && !string.Equals(ProviderCallId, normalized, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("A different provider identity is already assigned.");
+        }
+
+        string? parent = NormalizeOptional(providerParentCallId, nameof(providerParentCallId), 200);
+        if (ProviderCallId == normalized && ProviderParentCallId == parent) return;
+        ProviderCallId = normalized;
+        ProviderParentCallId = parent;
+        Version++;
+    }
 
     public void MarkRinging()
     {

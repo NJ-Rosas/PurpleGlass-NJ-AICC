@@ -28,6 +28,10 @@ public sealed record OutboundCallRequested(
     Guid CallId,
     DateTimeOffset RequestedAtUtc);
 
+public sealed record CallHangupRequested(Guid CallId, DateTimeOffset RequestedAtUtc);
+
+public sealed record CallProviderIdentityAssigned(Guid CallId, string Provider, DateTimeOffset AssignedAtUtc);
+
 public sealed record CallEligibility(
     Guid CallId,
     Guid TenantId,
@@ -45,6 +49,26 @@ public interface ICallEligibilityQuery
 
 public sealed record StartOutboundCallRequest(string DestinationNumber);
 
+public sealed record TelephonyNumberRequest(
+    Guid? LocationId,
+    string Provider,
+    string Number,
+    string? ProviderNumberId,
+    bool InboundEnabled,
+    bool OutboundEnabled,
+    bool Active);
+
+public sealed record TelephonyNumberSummary(
+    Guid Id,
+    Guid TenantId,
+    Guid? LocationId,
+    string Provider,
+    string Number,
+    bool InboundEnabled,
+    bool OutboundEnabled,
+    bool Active,
+    long Version);
+
 public sealed record CallSummary(
     Guid CallId,
     string Direction,
@@ -54,4 +78,7 @@ public sealed record CallSummary(
     string? Outcome,
     string? Summary,
     string? RecordingReference,
-    long Version);
+    long Version,
+    string Provider = "Synthetic",
+    string FromNumber = "",
+    string ToNumber = "");

@@ -16,5 +16,9 @@
     <ProjectReference Include="..\..\BuildingBlocks\PurpleGlass.Eventing\PurpleGlass.Eventing.csproj" />
     <ProjectReference Include="..\..\BuildingBlocks\PurpleGlass.Eventing.Infrastructure\PurpleGlass.Eventing.Infrastructure.csproj" />
     <ProjectReference Include="..\..\BuildingBlocks\PurpleGlass.Observability\PurpleGlass.Observability.csproj" />
+    <ProjectReference Include="..\..\Modules\CallManagement\Application\PurpleGlass.Modules.CallManagement.Application.csproj" />
+    <ProjectReference Include="..\..\Modules\CallManagement\Infrastructure\PurpleGlass.Modules.CallManagement.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\Adapters\Telephony\PurpleGlass.Adapters.Telephony.Fake\PurpleGlass.Adapters.Telephony.Fake.csproj" />
+    <ProjectReference Include="..\..\Adapters\Telephony\PurpleGlass.Adapters.Telephony.Twilio\PurpleGlass.Adapters.Telephony.Twilio.csproj" />
   </ItemGroup>
 </Project>

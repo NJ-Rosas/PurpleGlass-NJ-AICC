@@ -135,6 +135,12 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PurpleGlass.Modules.Identit
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PurpleGlass.Modules.Identity.Application", "Modules\Identity\Application\PurpleGlass.Modules.Identity.Application.csproj", "{6152F328-DAB1-4BF6-95C8-F2C50BB0E235}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Telephony", "Telephony", "{87BDD15A-CF31-5F02-D2D5-916D43137EF8}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PurpleGlass.Adapters.Telephony.Twilio", "Adapters\Telephony\PurpleGlass.Adapters.Telephony.Twilio\PurpleGlass.Adapters.Telephony.Twilio.csproj", "{C7703C7C-A265-4A60-9942-61EEEFF65140}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PurpleGlass.Adapters.Telephony.Fake", "Adapters\Telephony\PurpleGlass.Adapters.Telephony.Fake\PurpleGlass.Adapters.Telephony.Fake.csproj", "{002230CA-F902-4A20-8C34-81FA3A771163}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -589,6 +595,30 @@ Global
 		{6152F328-DAB1-4BF6-95C8-F2C50BB0E235}.Release|x64.Build.0 = Release|Any CPU
 		{6152F328-DAB1-4BF6-95C8-F2C50BB0E235}.Release|x86.ActiveCfg = Release|Any CPU
 		{6152F328-DAB1-4BF6-95C8-F2C50BB0E235}.Release|x86.Build.0 = Release|Any CPU
+		{C7703C7C-A265-4A60-9942-61EEEFF65140}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C7703C7C-A265-4A60-9942-61EEEFF65140}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C7703C7C-A265-4A60-9942-61EEEFF65140}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{C7703C7C-A265-4A60-9942-61EEEFF65140}.Debug|x64.Build.0 = Debug|Any CPU
+		{C7703C7C-A265-4A60-9942-61EEEFF65140}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{C7703C7C-A265-4A60-9942-61EEEFF65140}.Debug|x86.Build.0 = Debug|Any CPU
+		{C7703C7C-A265-4A60-9942-61EEEFF65140}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C7703C7C-A265-4A60-9942-61EEEFF65140}.Release|Any CPU.Build.0 = Release|Any CPU
+		{C7703C7C-A265-4A60-9942-61EEEFF65140}.Release|x64.ActiveCfg = Release|Any CPU
+		{C7703C7C-A265-4A60-9942-61EEEFF65140}.Release|x64.Build.0 = Release|Any CPU
+		{C7703C7C-A265-4A60-9942-61EEEFF65140}.Release|x86.ActiveCfg = Release|Any CPU
+		{C7703C7C-A265-4A60-9942-61EEEFF65140}.Release|x86.Build.0 = Release|Any CPU
+		{002230CA-F902-4A20-8C34-81FA3A771163}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{002230CA-F902-4A20-8C34-81FA3A771163}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{002230CA-F902-4A20-8C34-81FA3A771163}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{002230CA-F902-4A20-8C34-81FA3A771163}.Debug|x64.Build.0 = Debug|Any CPU
+		{002230CA-F902-4A20-8C34-81FA3A771163}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{002230CA-F902-4A20-8C34-81FA3A771163}.Debug|x86.Build.0 = Debug|Any CPU
+		{002230CA-F902-4A20-8C34-81FA3A771163}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{002230CA-F902-4A20-8C34-81FA3A771163}.Release|Any CPU.Build.0 = Release|Any CPU
+		{002230CA-F902-4A20-8C34-81FA3A771163}.Release|x64.ActiveCfg = Release|Any CPU
+		{002230CA-F902-4A20-8C34-81FA3A771163}.Release|x64.Build.0 = Release|Any CPU
+		{002230CA-F902-4A20-8C34-81FA3A771163}.Release|x86.ActiveCfg = Release|Any CPU
+		{002230CA-F902-4A20-8C34-81FA3A771163}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -652,5 +682,8 @@ Global
 		{293C06CD-4E17-48BD-9F3B-B5ADDFFA9425} = {CA253913-39DE-BFD0-C9A3-4B7EC6FBDF17}
 		{3B5A848C-8DF5-4DC2-8FC1-59F67C4BAFD0} = {293C06CD-4E17-48BD-9F3B-B5ADDFFA9425}
 		{6152F328-DAB1-4BF6-95C8-F2C50BB0E235} = {293C06CD-4E17-48BD-9F3B-B5ADDFFA9425}
+		{87BDD15A-CF31-5F02-D2D5-916D43137EF8} = {09DF2EE5-5FE7-3EC7-59CB-CAD7E0928979}
+		{C7703C7C-A265-4A60-9942-61EEEFF65140} = {87BDD15A-CF31-5F02-D2D5-916D43137EF8}
+		{002230CA-F902-4A20-8C34-81FA3A771163} = {87BDD15A-CF31-5F02-D2D5-916D43137EF8}
 	EndGlobalSection
 EndGlobal

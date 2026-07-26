@@ -16,6 +16,8 @@ using PurpleGlass.Modules.Identity.Application;
 using PurpleGlass.Modules.Identity.Domain;
 using PurpleGlass.Modules.Tenancy.Application;
 using PurpleGlass.Modules.Tenancy.Domain;
+using PurpleGlass.Adapters.Telephony.Fake;
+using PurpleGlass.Adapters.Telephony.Twilio;
 
 namespace PurpleGlass.ArchitectureTests;
 
@@ -136,6 +138,18 @@ public sealed class LayerDependencyTests
         AssertAssembliesDoNotReference(
             ApplicationAssemblies.Concat(DomainAssemblies),
             ["OpenAI", "Anthropic", "Azure.AI", "Whisper", "ElevenLabs", "Twilio"]);
+    }
+
+    [Fact]
+    public void TelephonyAdaptersImplementNeutralPortAndVendorSdkIsIsolated()
+    {
+        Assert.True(typeof(ITelephonyProvider).IsAssignableFrom(typeof(FakeTelephonyProvider)));
+        Assert.True(typeof(ITelephonyProvider).IsAssignableFrom(typeof(TwilioTelephonyProvider)));
+        AssertAssembliesDoNotReference(
+            [typeof(FakeTelephonyProvider).Assembly],
+            ["Twilio", "Microsoft.EntityFrameworkCore", "Npgsql", ".Infrastructure"]);
+        Assert.Contains(typeof(TwilioTelephonyProvider).Assembly.GetReferencedAssemblies(),
+            reference => reference.Name == "Twilio");
     }
 
     [Fact]

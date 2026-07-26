@@ -99,7 +99,7 @@ public sealed class DurablePathTests(DurablePathFixture fixture)
             CallSummary replay = await Calls(context).RegisterInboundAsync(command, default);
             Assert.Equal(first.CallId, replay.CallId);
             Assert.Equal(1, await context.Calls.CountAsync(entity => entity.TenantId == new PurpleGlass.Modules.CallManagement.Domain.TenantId(tenant)));
-            Assert.Equal(1, await context.OutboxMessages.CountAsync(entity => entity.MessageType == nameof(CallReceived)));
+            Assert.Equal(1, await context.OutboxMessages.CountAsync(entity => entity.TenantId == tenant && entity.MessageType == nameof(CallReceived)));
         }
     }
 

@@ -8,11 +8,15 @@ import {
   useGetSessionQuery,
   useGetTenantSummaryQuery,
   useLogoutMutation,
+  useGetTelephonyStatusQuery,
+  useStartOutboundCallMutation,
+  useHangupCallMutation,
   useUpdateLocationNameMutation,
 } from '../services/prototypeApi'
 import { store } from '../app/store'
 import { reportOperationalFailure } from '../services/operationalDiagnostics'
 import { DeadLetterOperations } from './DeadLetterOperations'
+import { HangupControl, TelephonyControls } from './TelephonyControls'
 
 export function App() {
   const { data: session, isLoading: sessionLoading, isError: sessionError, refetch: refetchSession } = useGetSessionQuery()
@@ -24,6 +28,9 @@ export function App() {
   const [realtime, setRealtime] = useState<'connecting' | 'live' | 'offline'>('connecting')
   const { data: calls = [], isLoading: callsLoading, isError: callsError } = useGetCallsQuery(undefined, { skip: !session })
   const [selectedCallId, setSelectedCallId] = useState<string>()
+  const { data: telephonyStatus } = useGetTelephonyStatusQuery(undefined, { skip: !session })
+  const [startCall, startCallState] = useStartOutboundCallMutation()
+  const [hangupCall, hangupState] = useHangupCallMutation()
   const [view, setView] = useState<'dashboard' | 'dead-letters'>('dashboard')
   const selectedCall = selectedCallId ?? calls[0]?.callId
   const { data: callDetails, isLoading: detailsLoading } = useGetCallDetailsQuery(selectedCall ?? '', {
@@ -48,6 +55,9 @@ export function App() {
     const refreshCalls = () => store.dispatch(prototypeApi.util.invalidateTags(['Calls']))
     const callEventTypes = [
       'call-received',
+      'outbound-call-requested',
+      'call-hangup-requested',
+      'call-provider-identity-assigned',
       'call-state-changed',
       'call-completed',
       'call-failed',
@@ -77,6 +87,12 @@ export function App() {
     event.preventDefault()
     if (!data || !name.trim()) return
     await updateName({ locationId: data.locationId, displayName: name.trim(), expectedVersion: data.version })
+  }
+
+  async function requestCall(destinationNumber: string) {
+    if (!data) return
+    const call = await startCall({ locationId: data.locationId, destinationNumber, idempotencyKey: crypto.randomUUID() }).unwrap()
+    setSelectedCallId(call.callId)
   }
 
   if (sessionLoading) return <main className="auth-shell"><section className="panel">Checking your secure session…</section></main>
@@ -136,6 +152,10 @@ export function App() {
             <article className="metric"><span>Response time</span><strong>Live</strong><small>MQTT + SSE connected</small></article>
           </section>
 
+          <TelephonyControls status={telephonyStatus}
+            canInitiate={session.permissions.includes('calls.outbound.initiate')}
+            loading={startCallState.isLoading} error={startCallState.isError} onStart={requestCall} />
+
           <section className="calls-layout">
             <div className="panel call-list">
               <div className="section-heading">
@@ -179,9 +199,14 @@ export function App() {
                     <div>
                       <h3>{callDetails.call.direction} call</h3>
                       <p className="subtle">{callDetails.call.outcome ?? callDetails.call.state}</p>
+                      <p className="subtle">{callDetails.call.provider} · {callDetails.call.fromNumber} → {callDetails.call.toNumber}</p>
                     </div>
                     <span className={`call-state ${callDetails.call.state.toLowerCase()}`}>{callDetails.call.state}</span>
                   </div>
+                  <HangupControl canHangup={session.permissions.includes('calls.outbound.initiate')
+                    && !['Completed', 'Failed'].includes(callDetails.call.state)}
+                    loading={hangupState.isLoading} error={hangupState.isError}
+                    onHangup={() => hangupCall(callDetails.call.callId)} />
                   {callDetails.conversation?.summary && (
                     <div className="summary-card">
                       <strong>AI summary</strong>

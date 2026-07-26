@@ -54,6 +54,14 @@ public static class PurpleGlassTelemetry
     public static readonly Counter<long> MqttPublishFailures = Meter.CreateCounter<long>("purpleglass.mqtt.publish.failures");
     public static readonly Counter<long> MqttReceived = Meter.CreateCounter<long>("purpleglass.mqtt.received");
     public static readonly Counter<long> MqttReconnects = Meter.CreateCounter<long>("purpleglass.mqtt.reconnects");
+    public static readonly Counter<long> TelephonyInboundCalls = Meter.CreateCounter<long>("purpleglass.telephony.calls.inbound");
+    public static readonly Counter<long> TelephonyOutboundCalls = Meter.CreateCounter<long>("purpleglass.telephony.calls.outbound");
+    public static readonly Counter<long> TelephonyCallsConnected = Meter.CreateCounter<long>("purpleglass.telephony.calls.connected");
+    public static readonly Counter<long> TelephonyCallsFailed = Meter.CreateCounter<long>("purpleglass.telephony.calls.failed");
+    public static readonly Counter<long> TelephonyWebhooksReceived = Meter.CreateCounter<long>("purpleglass.telephony.webhook.received");
+    public static readonly Counter<long> TelephonyWebhooksInvalid = Meter.CreateCounter<long>("purpleglass.telephony.webhook.invalid");
+    public static readonly Counter<long> TelephonyProviderErrors = Meter.CreateCounter<long>("purpleglass.telephony.provider.errors");
+    public static readonly Histogram<double> TelephonyCallDuration = Meter.CreateHistogram<double>("purpleglass.telephony.call.duration", "s");
     public static readonly Counter<long> SecurityAuthSuccess = Meter.CreateCounter<long>("purpleglass.security.auth.success");
     public static readonly Counter<long> SecurityAuthFailure = Meter.CreateCounter<long>("purpleglass.security.auth.failure");
     public static readonly Counter<long> SecurityAuthorizationDenied = Meter.CreateCounter<long>("purpleglass.security.authorization.denied");

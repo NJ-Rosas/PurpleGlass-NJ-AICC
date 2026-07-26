@@ -215,10 +215,10 @@ public sealed partial class CallOrchestrationService(
         request.Direction == SimulatedCallDirection.Inbound
             ? await calls.RegisterInboundAsync(new RegisterInboundCall(
                 request.TenantId, request.LocationId, request.StartKey, request.FromNumber, request.ToNumber,
-                request.CorrelationId, request.CausationId, request.TraceId), cancellationToken)
+                request.CorrelationId, request.CausationId, request.TraceId, Provider: "Synthetic"), cancellationToken)
             : await calls.RequestOutboundAsync(new RequestOutboundCall(
                 request.TenantId, request.LocationId, request.StartKey, request.FromNumber, request.ToNumber,
-                request.CorrelationId, request.CausationId, request.TraceId), cancellationToken);
+                request.CorrelationId, request.CausationId, request.TraceId, Provider: "Synthetic"), cancellationToken);
 
     private async Task<ConversationStatusProjection> PersistAssistantAsync(
         SimulatedCallRequest request,

@@ -10,6 +10,7 @@ public static class CallManagementInfrastructureExtensions
     {
         services.AddDbContext<CallManagementDbContext>(options => options.UseNpgsql(connectionString));
         services.AddScoped<ICallStore>(provider => provider.GetRequiredService<CallManagementDbContext>());
+        services.AddScoped<ITelephonyStore>(provider => provider.GetRequiredService<CallManagementDbContext>());
         services.AddScoped<CallManagementService>();
         services.AddScoped<PurpleGlass.Modules.CallManagement.Contracts.ICallEligibilityQuery>(provider => provider.GetRequiredService<CallManagementService>());
         services.AddSingleton(TimeProvider.System);

@@ -25,7 +25,7 @@ public sealed class SimulatedCallFlowTests(SimulatedCallFlowFixture fixture)
         SimulatedCallResult result = await harness.Service.RunAsync(request, default);
         var replay = await harness.CallsService.RegisterInboundAsync(new RegisterInboundCall(
             request.TenantId, request.LocationId, request.StartKey, request.FromNumber, request.ToNumber,
-            request.CorrelationId, request.CausationId, request.TraceId), default);
+            request.CorrelationId, request.CausationId, request.TraceId, Provider: "Synthetic"), default);
 
         Assert.Equal("Completed", result.CallState);
         Assert.Equal("Completed", result.ConversationState);
@@ -51,7 +51,7 @@ public sealed class SimulatedCallFlowTests(SimulatedCallFlowFixture fixture)
         SimulatedCallResult result = await harness.Service.RunAsync(request, default);
         var replay = await harness.CallsService.RequestOutboundAsync(new RequestOutboundCall(
             request.TenantId, request.LocationId, request.StartKey, request.FromNumber, request.ToNumber,
-            request.CorrelationId, request.CausationId, request.TraceId), default);
+            request.CorrelationId, request.CausationId, request.TraceId, Provider: "Synthetic"), default);
 
         Assert.Equal("Completed", result.CallState);
         Assert.Contains("Call:Ringing", result.StateTransitions);

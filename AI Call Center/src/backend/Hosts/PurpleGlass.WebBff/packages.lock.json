@@ -79,6 +79,11 @@
           "Microsoft.IdentityModel.Logging": "8.19.2"
         }
       },
+      "Newtonsoft.Json": {
+        "type": "Transitive",
+        "resolved": "13.0.1",
+        "contentHash": "ppPFpBcvxdsfUonNcvITKqLl3bqxWbDCZIzDWHzjpdAHRFfZe0Dw9HmA0+za13IdyrgJwpkDTDA9fHaxOrt20A=="
+      },
       "Npgsql": {
         "type": "Transitive",
         "resolved": "10.0.0",
@@ -112,6 +117,19 @@
         "dependencies": {
           "Microsoft.IdentityModel.JsonWebTokens": "8.19.2",
           "Microsoft.IdentityModel.Tokens": "8.19.2"
+        }
+      },
+      "purpleglass.adapters.telephony.fake": {
+        "type": "Project",
+        "dependencies": {
+          "PurpleGlass.Modules.CallManagement.Application": "[1.0.0, )"
+        }
+      },
+      "purpleglass.adapters.telephony.twilio": {
+        "type": "Project",
+        "dependencies": {
+          "PurpleGlass.Modules.CallManagement.Application": "[1.0.0, )",
+          "Twilio": "[7.14.9, )"
         }
       },
       "purpleglass.application.abstractions": {
@@ -352,6 +370,17 @@
         "contentHash": "HyYenisDn/xdtyVXdjImsCl+RNC2gq01N0rvSR7tsYAylXR2sxX/YgMsyTajMXA27+r1vB7lNU8cWRhV0fwL+Q==",
         "dependencies": {
           "OpenTelemetry.Api": "[1.17.0, 2.0.0)"
+        }
+      },
+      "Twilio": {
+        "type": "CentralTransitive",
+        "requested": "[7.14.9, )",
+        "resolved": "7.14.9",
+        "contentHash": "dYFgEoNofKasj2cpYddZT7yVkBexkQz4eTlQ4c72BO2H1H8UbTGGl9Aa7NIFBUuTcdNWOYwIZlHjmitlRng28g==",
+        "dependencies": {
+          "Microsoft.IdentityModel.Tokens": "8.3.1",
+          "Newtonsoft.Json": "13.0.1",
+          "System.IdentityModel.Tokens.Jwt": "8.3.1"
         }
       }
     }

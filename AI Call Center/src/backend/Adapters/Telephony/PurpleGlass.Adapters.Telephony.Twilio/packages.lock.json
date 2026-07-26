@@ -1,0 +1,108 @@
+{
+  "version": 2,
+  "dependencies": {
+    "net10.0": {
+      "Twilio": {
+        "type": "Direct",
+        "requested": "[7.14.9, )",
+        "resolved": "7.14.9",
+        "contentHash": "dYFgEoNofKasj2cpYddZT7yVkBexkQz4eTlQ4c72BO2H1H8UbTGGl9Aa7NIFBUuTcdNWOYwIZlHjmitlRng28g==",
+        "dependencies": {
+          "Microsoft.IdentityModel.Tokens": "8.3.1",
+          "Newtonsoft.Json": "13.0.1",
+          "System.IdentityModel.Tokens.Jwt": "8.3.1"
+        }
+      },
+      "Microsoft.Extensions.DependencyInjection.Abstractions": {
+        "type": "Transitive",
+        "resolved": "9.0.0",
+        "contentHash": "+6f2qv2a3dLwd5w6JanPIPs47CxRbnk+ZocMJUhv9NxP88VlOcJYZs9jY+MYSjxvady08bUZn6qgiNh7DadGgg=="
+      },
+      "Microsoft.Extensions.Logging.Abstractions": {
+        "type": "Transitive",
+        "resolved": "9.0.0",
+        "contentHash": "g0UfujELzlLbHoVG8kPKVBaW470Ewi+jnptGS9KUi6jcb+k2StujtK3m26DFSGGwQ/+bVgZfsWqNzlP6YOejvw==",
+        "dependencies": {
+          "Microsoft.Extensions.DependencyInjection.Abstractions": "9.0.0"
+        }
+      },
+      "Microsoft.IdentityModel.Abstractions": {
+        "type": "Transitive",
+        "resolved": "8.3.1",
+        "contentHash": "oXYKRcTS0DTIB5vZenGy9oceD8awhjnXFFabc/IWBwluMA03SGvazCFyUIQ2mJOIOSf9lLyM971nbTj9qZgEJg=="
+      },
+      "Microsoft.IdentityModel.JsonWebTokens": {
+        "type": "Transitive",
+        "resolved": "8.3.1",
+        "contentHash": "cA622rrXYdaO7inNZ8KY5leZpP6889wT+gHPgvy62PYlAITyxF9PxP5u+ecNBOsPx2PagBH7ZNr39yU/MOPn+w==",
+        "dependencies": {
+          "Microsoft.IdentityModel.Tokens": "8.3.1"
+        }
+      },
+      "Microsoft.IdentityModel.Logging": {
+        "type": "Transitive",
+        "resolved": "8.3.1",
+        "contentHash": "XCwbK7ErgZdrwl4ph+i8X5SCGwAepBFbsNIEceozGzrBFVvZbKKJE1WQOft9QyglP4me+DECdVVL8UnI6OO+sg==",
+        "dependencies": {
+          "Microsoft.IdentityModel.Abstractions": "8.3.1"
+        }
+      },
+      "Microsoft.IdentityModel.Tokens": {
+        "type": "Transitive",
+        "resolved": "8.3.1",
+        "contentHash": "77GXREJzIDiKAc/RR8YE267bwzrxM4cjMRCzMQa0Xk1MUUdjx/JwjDJpUh00vT4oxcX5rjsMP0KLd8YjgR3N3w==",
+        "dependencies": {
+          "Microsoft.Extensions.Logging.Abstractions": "9.0.0",
+          "Microsoft.IdentityModel.Logging": "8.3.1"
+        }
+      },
+      "Newtonsoft.Json": {
+        "type": "Transitive",
+        "resolved": "13.0.1",
+        "contentHash": "ppPFpBcvxdsfUonNcvITKqLl3bqxWbDCZIzDWHzjpdAHRFfZe0Dw9HmA0+za13IdyrgJwpkDTDA9fHaxOrt20A=="
+      },
+      "System.IdentityModel.Tokens.Jwt": {
+        "type": "Transitive",
+        "resolved": "8.3.1",
+        "contentHash": "SxdCv+SmnKOhUvryKvrpWJnkuVHj3hU8pUwj7R8zthi73TlBUlMyavon9qfuJsjnqY+L7jusp3Zo0fWFX6mwtw==",
+        "dependencies": {
+          "Microsoft.IdentityModel.JsonWebTokens": "8.3.1",
+          "Microsoft.IdentityModel.Tokens": "8.3.1"
+        }
+      },
+      "purpleglass.application.abstractions": {
+        "type": "Project",
+        "dependencies": {
+          "PurpleGlass.SharedKernel": "[1.0.0, )"
+        }
+      },
+      "purpleglass.eventing": {
+        "type": "Project",
+        "dependencies": {
+          "PurpleGlass.Application.Abstractions": "[1.0.0, )",
+          "PurpleGlass.SharedKernel": "[1.0.0, )"
+        }
+      },
+      "purpleglass.modules.callmanagement.application": {
+        "type": "Project",
+        "dependencies": {
+          "PurpleGlass.Eventing": "[1.0.0, )",
+          "PurpleGlass.Modules.CallManagement.Contracts": "[1.0.0, )",
+          "PurpleGlass.Modules.CallManagement.Domain": "[1.0.0, )"
+        }
+      },
+      "purpleglass.modules.callmanagement.contracts": {
+        "type": "Project"
+      },
+      "purpleglass.modules.callmanagement.domain": {
+        "type": "Project",
+        "dependencies": {
+          "PurpleGlass.SharedKernel": "[1.0.0, )"
+        }
+      },
+      "purpleglass.sharedkernel": {
+        "type": "Project"
+      }
+    }
+  }
+}

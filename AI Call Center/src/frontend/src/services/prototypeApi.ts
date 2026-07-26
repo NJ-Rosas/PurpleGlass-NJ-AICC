@@ -32,7 +32,12 @@ export interface CallSummary {
   summary?: string
   recordingReference?: string
   version: number
+  provider: string
+  fromNumber: string
+  toNumber: string
 }
+
+export interface TelephonyStatus { provider: string; enabled: boolean; configured: boolean; state: string }
 
 export interface TranscriptTurn {
   turnId: string
@@ -138,6 +143,15 @@ export const prototypeApi = createApi({
     }),
     getCalls: builder.query<CallSummary[], void>({ query: () => '/calls?limit=20', providesTags: ['Calls'] }),
     getCallDetails: builder.query<CallDetails, string>({ query: (callId) => `/calls/${callId}`, providesTags: ['Calls'] }),
+    getTelephonyStatus: builder.query<TelephonyStatus, void>({ query: () => '/telephony/status' }),
+    startOutboundCall: builder.mutation<CallSummary, { locationId: string; destinationNumber: string; idempotencyKey: string }>({
+      query: (body) => ({ url: '/calls/outbound', method: 'POST', body }),
+      invalidatesTags: ['Calls'],
+    }),
+    hangupCall: builder.mutation<CallSummary, string>({
+      query: (callId) => ({ url: `/calls/${callId}/hangup`, method: 'POST' }),
+      invalidatesTags: ['Calls'],
+    }),
     getDeadLetters: builder.query<DeadLetterPage, DeadLetterFilters>({
       query: (filters) => ({ url: '/operations/dead-letters', params: filters }),
       providesTags: ['DeadLetters'],
@@ -156,5 +170,6 @@ export const prototypeApi = createApi({
 export const {
   useGetSessionQuery, useDevelopmentLoginMutation, useLogoutMutation,
   useGetTenantSummaryQuery, useUpdateLocationNameMutation, useGetCallsQuery, useGetCallDetailsQuery,
+  useGetTelephonyStatusQuery, useStartOutboundCallMutation, useHangupCallMutation,
   useGetDeadLettersQuery, useGetDeadLetterQuery, useRetryDeadLetterMutation,
 } = prototypeApi
