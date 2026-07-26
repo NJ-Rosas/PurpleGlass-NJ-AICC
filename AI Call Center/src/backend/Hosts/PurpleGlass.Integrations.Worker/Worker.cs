@@ -14,12 +14,14 @@ public sealed partial class Worker(
     IConfiguration configuration,
     TimeProvider timeProvider,
     IOptions<OutboxPublisherOptions> publisherOptions,
+    WorkerRuntimeState runtimeState,
     ILogger<Worker> logger) : BackgroundService
 {
     private readonly OutboxPublisherOptions settings = Validate(publisherOptions.Value);
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        runtimeState.MarkStarted();
         MqttConnectionSettings mqttSettings = MqttConnectionSettings.From(configuration);
         var factory = new MqttClientFactory();
         using IMqttClient client = factory.CreateMqttClient();
@@ -44,9 +46,11 @@ public sealed partial class Worker(
                 }
 
                 await PublishBatchAsync(client, stoppingToken);
+                runtimeState.MarkCycleHealthy(client.IsConnected);
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
             {
+                runtimeState.MarkCycleFailure(client.IsConnected);
                 LogPublisherCycleFailure(logger, exception);
                 await Task.Delay(settings.FailureRetryDelay, timeProvider, stoppingToken);
                 continue;
@@ -54,6 +58,7 @@ public sealed partial class Worker(
 
             await Task.Delay(settings.PollInterval, timeProvider, stoppingToken);
         }
+        runtimeState.MarkStopping();
     }
 
     private async Task PublishBatchAsync(IMqttClient client, CancellationToken cancellationToken)

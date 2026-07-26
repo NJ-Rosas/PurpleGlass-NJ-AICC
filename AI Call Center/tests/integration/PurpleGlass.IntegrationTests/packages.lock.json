@@ -578,6 +578,19 @@
           "PurpleGlass.Observability": "[1.0.0, )"
         }
       },
+      "purpleglass.integrations.worker": {
+        "type": "Project",
+        "dependencies": {
+          "MQTTnet": "[5.2.0.1603, )",
+          "PurpleGlass.Adapters.Telephony.Fake": "[1.0.0, )",
+          "PurpleGlass.Adapters.Telephony.Twilio": "[1.0.0, )",
+          "PurpleGlass.Eventing": "[1.0.0, )",
+          "PurpleGlass.Eventing.Infrastructure": "[1.0.0, )",
+          "PurpleGlass.Modules.CallManagement.Application": "[1.0.0, )",
+          "PurpleGlass.Modules.CallManagement.Infrastructure": "[1.0.0, )",
+          "PurpleGlass.Observability": "[1.0.0, )"
+        }
+      },
       "purpleglass.modules.audit.application": {
         "type": "Project",
         "dependencies": {

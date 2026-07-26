@@ -17,7 +17,7 @@ The estimated recurring infrastructure cost is **$0/month**, excluding optional 
 
 `purpleglass-web` builds the React application into the Web BFF image. Browser API calls, cookies, CSRF, SSE, HTTPS callbacks, and WSS media therefore remain same-origin. `numInstances: 1` is required because realtime voice sessions are process-local.
 
-`purpleglass-integrations-worker` still runs the unchanged .NET worker, transactional outbox publisher, and telephony transport worker. Render does not offer free background-worker instances, so a tiny static health listener makes its container eligible for the free Web Service plan. This listener does not process business work or bypass architectural boundaries.
+`purpleglass-integrations-worker` runs the .NET transactional outbox publisher and telephony transport worker as a free Web Service. The same .NET process exposes lightweight liveness and dependency-aware readiness endpoints; there is no separate static health listener.
 
 Render cannot host the private raw-TCP Mosquitto topology for free: private services have no Free plan, and public Web Services expose HTTP/WebSocket traffic rather than a public MQTT TCP listener. The free Blueprint therefore uses an externally created HiveMQ Cloud Serverless cluster over authenticated TLS on port 8883. Local Compose continues using Mosquitto without TLS on port 1883.
 
@@ -49,13 +49,17 @@ For an existing Blueprint, newly declared `sync: false` variables have names in 
 
 .NET loads the host's `appsettings.json`, then the environment-specific `appsettings.Development.json` when present, and finally environment variables. Environment variables use double underscores to map nested keys, so `Providers__EnableRealSpeech` overrides `Providers:EnableRealSpeech` from JSON. On Render, Blueprint sync applies the non-secret environment values declared in `render.yaml`; Render-managed `sync: false` values provide only the corresponding secrets/manual external inputs. A later service deploy consumes the environment already attached to that service but does not itself synchronize a changed Blueprint.
 
-The BFF reads Render's `PORT` and binds to `0.0.0.0:<PORT>`. The worker image exposes only a static `/health/live` endpoint for Render lifecycle management. Local `Start-PurpleGlass.ps1`, ports 5101/5173, PostgreSQL, Mosquitto, Valkey, frontend, BFF, and worker behavior remain unchanged.
+The BFF and integrations worker read Render's `PORT` and bind to `0.0.0.0:<PORT>`. Worker `/health/live` proves only that the .NET process and HTTP server respond. Worker `/health/ready` verifies PostgreSQL connectivity, the actual publisher MQTT connection, a successful worker processing cycle, and required telephony-provider configuration. Local `Start-PurpleGlass.ps1`, ports 5101/5173, PostgreSQL, Mosquitto, Valkey, frontend, and BFF behavior remain unchanged.
 
 ## Migrations and health
 
 Free Web Services do not support Render's paid pre-deploy command. The single BFF container therefore runs the dedicated `PurpleGlass.Migrations` executable before starting the web process. Only the one-instance BFF performs migrations; the worker never migrates. Repeated cold starts safely find the schema current. During a deploy, the old BFF can remain available while the replacement performs migration.
 
-Render uses BFF `/health/live` as its deployment health gate. This endpoint is process/container liveness: it confirms ASP.NET started, the HTTP server is responding, and the process is alive without making temporary external dependency failures restart a functioning service. BFF `/health/ready` remains the independent operational-readiness endpoint; it verifies PostgreSQL connectivity and telephony-provider readiness and should be checked after deployment before an experiment. The worker wrapper's `/health/live` confirms its container is awake; inspect sanitized worker logs to confirm MQTT connectivity and outbox progress.
+Render uses each service's `/health/live` as its deployment health gate. Liveness confirms the relevant .NET process and HTTP server respond without making temporary dependency failures restart a functioning service. BFF `/health/ready` verifies PostgreSQL and telephony/realtime-voice readiness. Worker `/health/ready` independently reports `postgres`, `mqtt`, `worker`, and `telephony` components and must be healthy before an experiment.
+
+Expected optimistic-concurrency conflicts during telephony completion are recovered at the individual dispatch boundary. The provider action is never repeated: completion is retried a maximum of three times in fresh scopes that reload current durable state. A result already completed by a concurrent callback converges idempotently, terminal call state is not overwritten, exhausted conflicts are logged with safe identifiers, and the worker continues. Unexpected exceptions are not globally ignored and retain the host's fatal-failure behavior.
+
+Operationally, `live` deployment metadata proves only which image Render selected; `/health/live` proves the current process responds; `/health/ready` proves its required dependencies and processing state are usable. A 503 readiness response with a named component is dependency degradation, not by itself a liveness failure.
 
 ## Task 10 Twilio cloud-development configuration
 

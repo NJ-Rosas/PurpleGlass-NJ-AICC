@@ -33,6 +33,7 @@
     <ProjectReference Include="..\..\..\src\backend\Adapters\Audio\PurpleGlass.Adapters.Audio.Fake\PurpleGlass.Adapters.Audio.Fake.csproj" />
     <ProjectReference Include="..\..\..\src\backend\Hosts\PurpleGlass.CallOrchestrator.Worker\PurpleGlass.CallOrchestrator.Worker.csproj" />
     <ProjectReference Include="..\..\..\src\backend\Hosts\PurpleGlass.WebBff\PurpleGlass.WebBff.csproj" />
+    <ProjectReference Include="..\..\..\src\backend\Hosts\PurpleGlass.Integrations.Worker\PurpleGlass.Integrations.Worker.csproj" />
     <ProjectReference Include="..\..\..\src\backend\Adapters\Telephony\PurpleGlass.Adapters.Telephony.Fake\PurpleGlass.Adapters.Telephony.Fake.csproj" />
   </ItemGroup>
 
