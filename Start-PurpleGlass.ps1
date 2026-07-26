@@ -380,6 +380,15 @@ try {
     $npm = Resolve-RequiredCommand 'npm.cmd' 'Install npm with Node.js 24 LTS and run the launcher again.'
     $docker = Resolve-RequiredCommand 'docker' 'Install Docker Desktop with Docker Compose and run the launcher again.'
 
+    # Windows can resolve node.exe through its registered App Path even when the
+    # installation directory is absent from PATH. npm.cmd itself can start in
+    # that state, but npm scripts then fail when they perform a normal `node`
+    # lookup. Explicitly propagate the validated Node directory to every child.
+    $nodeDirectory = Split-Path -Parent $node
+    if (-not (($env:PATH -split ';') -contains $nodeDirectory)) {
+        $env:PATH = "$nodeDirectory;$env:PATH"
+    }
+
     $dotnetVersion = (& $dotnet --version).Trim()
     if ($LASTEXITCODE -ne 0) { throw 'The .NET SDK was found but could not run.' }
     $requiredDotnetVersion = (Get-Content -LiteralPath (Join-Path $ApplicationRoot 'global.json') -Raw | ConvertFrom-Json).sdk.version
