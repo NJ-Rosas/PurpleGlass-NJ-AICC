@@ -5,6 +5,7 @@ Multi-tenant AI call-center platform initially designed for dental offices.
 ## Documentation
 
 - [Application design and pre-coding plan](./APPLICATION_DESIGN.md)
+- [Current project state and next steps](./docs/PROJECT_STATE.md)
 - [Architecture documentation guide](./docs/architecture/README.md)
 - [Repository folder catalog](./docs/architecture/REPOSITORY_FOLDER_CATALOG.md)
 - [Backend modules and dependencies](./docs/architecture/BACKEND_MODULES_AND_DEPENDENCIES.md)
