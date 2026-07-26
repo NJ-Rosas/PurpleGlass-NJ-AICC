@@ -5,7 +5,7 @@ RUN dotnet publish src/backend/Hosts/PurpleGlass.Integrations.Worker/PurpleGlass
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0-alpine
 WORKDIR /app
-RUN apk add --no-cache busybox-extras krb5-libs
+RUN apk add --no-cache busybox-extras krb5-libs tzdata
 COPY --from=build /out ./
 COPY deploy/render/start-free-worker.sh ./start-free-worker.sh
 RUN mkdir -p /health/health && printf 'Healthy\n' > /health/health/live
