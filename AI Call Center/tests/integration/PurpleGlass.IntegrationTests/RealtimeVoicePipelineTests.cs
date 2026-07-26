@@ -1,5 +1,7 @@
 using System.Text;
+using System.Data.Common;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using PurpleGlass.Adapters.Audio.Fake;
 using PurpleGlass.Modules.CallManagement.Application;
 using PurpleGlass.Modules.CallManagement.Infrastructure;
@@ -154,6 +156,62 @@ public sealed class RealtimeVoicePipelineTests(DurablePathFixture fixture)
     }
 
     [Fact]
+    public async Task CallerBargeInDuringCallerTurnCommitDoesNotPoisonTheNextTurn()
+    {
+        var interceptor = new BlockingCallerTurnCommandInterceptor();
+        await using SessionHarness harness = await CreateHarnessAsync(commandInterceptor: interceptor);
+        Task run = harness.Start();
+        _ = await harness.States.WaitForAsync(change => change.State == VoiceSessionState.Listening);
+
+        await harness.Transport.QueueUtteranceAsync("Interrupted caller turn");
+        await interceptor.WaitUntilBlockedAsync();
+        await harness.Transport.QueueUtteranceAsync("Second caller turn");
+        _ = await harness.States.WaitForAsync(change => change.State == VoiceSessionState.Interrupted);
+        interceptor.Release();
+        await harness.Recognizer.WaitForInvocationsAsync(2);
+        Task responseStarted = harness.LanguageModel.WaitForInvocationsAsync(1);
+        Task next = await Task.WhenAny(responseStarted, run).WaitAsync(TestTimeout);
+        Assert.Same(responseStarted, next);
+        harness.Transport.CompleteInput();
+        await run.WaitAsync(TestTimeout);
+
+        ConversationDetails details = await ReadDetailsAsync(harness.TenantId, harness.CallId);
+        Assert.DoesNotContain(harness.States.Changes,
+            change => change.State == VoiceSessionState.Failed);
+        Assert.Equal("Completed", details.State);
+        Assert.Equal(["Interrupted caller turn", "Second caller turn"],
+            details.Transcript.Where(turn => turn.Speaker == "Caller")
+                .OrderBy(turn => turn.SequenceNumber).Select(turn => turn.Text).ToArray());
+        Assert.False(interceptor.CancellationObserved);
+        await AssertCompletedAndDisposedAsync(harness, "media_disconnected");
+    }
+
+    [Fact]
+    public async Task ProviderCompletionDuringCallerTurnCommitUsesFreshCleanupContext()
+    {
+        var interceptor = new BlockingCallerTurnCommandInterceptor();
+        await using SessionHarness harness = await CreateHarnessAsync(commandInterceptor: interceptor);
+        Task run = harness.Start();
+        _ = await harness.States.WaitForAsync(change => change.State == VoiceSessionState.Listening);
+
+        await harness.Transport.QueueUtteranceAsync("Caller turn during provider completion");
+        await interceptor.WaitUntilBlockedAsync();
+        await harness.CompleteFromProviderAsync();
+        await interceptor.WaitUntilCanceledAsync();
+        await run.WaitAsync(TestTimeout);
+
+        Assert.DoesNotContain(harness.States.Changes,
+            change => change.State == VoiceSessionState.Failed);
+        ConversationDetails details = await ReadDetailsAsync(harness.TenantId, harness.CallId);
+        Assert.Equal("Completed", details.State);
+        Assert.Single(details.Transcript);
+        Assert.Equal("Assistant", details.Transcript[0].Speaker);
+        var call = await harness.Calls.GetAsync(harness.TenantId, harness.CallId, default);
+        Assert.Equal("Completed", call.State);
+        await AssertCompletedAndDisposedAsync(harness, "provider_completed");
+    }
+
+    [Fact]
     public async Task HangupDuringSpeechRecognitionCancelsProviderAndCleansUpSession()
     {
         var recognizer = new ControlledSpeechRecognizer(blockOnInvocation: 1);
@@ -214,6 +272,37 @@ public sealed class RealtimeVoicePipelineTests(DurablePathFixture fixture)
         Assert.Equal(GreetingCallerAssistantSpeakers,
             details.Transcript.OrderBy(turn => turn.SequenceNumber).Select(turn => turn.Speaker).ToArray());
         await AssertCompletedAndDisposedAsync(harness, "hangup");
+    }
+
+    [Fact]
+    public async Task ProviderCompletionDuringSecondResponseEndsMultiTurnCallWithoutVoiceFailure()
+    {
+        var languageModel = new ControlledAiRuntime((_, invocation) =>
+            invocation == 1 ? "First answer." : "Second answer.");
+        var synthesizer = new ControlledSpeechSynthesizer(blockOnInvocation: 3);
+        await using SessionHarness harness = await CreateHarnessAsync(
+            languageModel: languageModel,
+            synthesizer: synthesizer);
+        Task run = harness.Start();
+        _ = await harness.States.WaitForAsync(change => change.State == VoiceSessionState.Listening);
+
+        await harness.Transport.QueueUtteranceAsync("First question");
+        _ = await harness.States.WaitForOccurrencesAsync(VoiceSessionState.Listening, 2);
+        await harness.Transport.QueueUtteranceAsync("Second question");
+        await synthesizer.WaitForInvocationsAsync(3);
+        await harness.CompleteFromProviderAsync();
+        await run.WaitAsync(TestTimeout);
+
+        Assert.True(synthesizer.CancellationObserved);
+        Assert.DoesNotContain(harness.States.Changes,
+            change => change.State == VoiceSessionState.Failed);
+        ConversationDetails details = await ReadDetailsAsync(harness.TenantId, harness.CallId);
+        Assert.Equal("Completed", details.State);
+        Assert.Equal([Greeting, "First question", "First answer.", "Second question", "Second answer."],
+            details.Transcript.OrderBy(turn => turn.SequenceNumber).Select(turn => turn.Text).ToArray());
+        var call = await harness.Calls.GetAsync(harness.TenantId, harness.CallId, default);
+        Assert.Equal("Completed", call.State);
+        await AssertCompletedAndDisposedAsync(harness, "provider_completed");
     }
 
     [Fact]
@@ -383,7 +472,8 @@ public sealed class RealtimeVoicePipelineTests(DurablePathFixture fixture)
     private async Task<SessionHarness> CreateHarnessAsync(
         ControlledSpeechRecognizer? recognizer = null,
         ControlledAiRuntime? languageModel = null,
-        ControlledSpeechSynthesizer? synthesizer = null)
+        ControlledSpeechSynthesizer? synthesizer = null,
+        DbCommandInterceptor? commandInterceptor = null)
     {
         Guid tenantId = Guid.NewGuid();
         Guid locationId = Guid.NewGuid();
@@ -409,14 +499,16 @@ public sealed class RealtimeVoicePipelineTests(DurablePathFixture fixture)
             recognizer ??= new ControlledSpeechRecognizer();
             languageModel ??= new ControlledAiRuntime();
             synthesizer ??= new ControlledSpeechSynthesizer();
+            var persistence = new FixtureRealtimeConversationPersistence(fixture, commandInterceptor);
             var session = new RealtimeVoiceSession(
-                conversationService,
+                persistence,
                 recognizer,
                 languageModel,
                 synthesizer,
                 Options(),
                 states,
-                TimeProvider.System);
+                TimeProvider.System,
+                new RecordingVoiceSessionDiagnostics());
             var identity = new VoiceSessionIdentity(
                 call.TenantId,
                 call.LocationId,
@@ -559,6 +651,14 @@ public sealed class RealtimeVoicePipelineTests(DurablePathFixture fixture)
             Session.RequestStop("hangup");
         }
 
+        public async Task CompleteFromProviderAsync()
+        {
+            _ = await Calls.ApplyProviderStatusAsync(new ApplyProviderCallStatus(
+                Identity.Provider, Identity.ProviderCallId, "completed",
+                $"completion-{Guid.NewGuid():N}"), default);
+            Session.RequestStop("provider_completed");
+        }
+
         public async ValueTask DisposeAsync()
         {
             if (run is { IsCompleted: false })
@@ -580,6 +680,11 @@ public sealed class RealtimeVoicePipelineTests(DurablePathFixture fixture)
         private readonly object synchronization = new();
         private readonly List<VoiceSessionStateChange> changes = [];
         private TaskCompletionSource published = NewSignal();
+
+        public IReadOnlyList<VoiceSessionStateChange> Changes
+        {
+            get { lock (synchronization) return changes.ToArray(); }
+        }
 
         public ValueTask PublishAsync(VoiceSessionStateChange change, CancellationToken cancellationToken)
         {
@@ -641,6 +746,98 @@ public sealed class RealtimeVoicePipelineTests(DurablePathFixture fixture)
 
         private static TaskCompletionSource NewSignal() =>
             new(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
+
+    private sealed class BlockingCallerTurnCommandInterceptor : DbCommandInterceptor
+    {
+        private readonly TaskCompletionSource blocked = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource canceled = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int turnInsertCommands;
+
+        public Task WaitUntilBlockedAsync() => blocked.Task.WaitAsync(TestTimeout);
+        public Task WaitUntilCanceledAsync() => canceled.Task.WaitAsync(TestTimeout);
+        public bool CancellationObserved => canceled.Task.IsCompleted;
+        public void Release() => release.TrySetResult();
+
+        public override async ValueTask<InterceptionResult<int>> NonQueryExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<int> result,
+            CancellationToken cancellationToken = default)
+        {
+            await BlockCallerTurnAsync(command, cancellationToken);
+            return result;
+        }
+
+        public override async ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default)
+        {
+            await BlockCallerTurnAsync(command, cancellationToken);
+            return result;
+        }
+
+        private async Task BlockCallerTurnAsync(DbCommand command, CancellationToken cancellationToken)
+        {
+            if (!command.CommandText.Contains("INSERT INTO", StringComparison.Ordinal)
+                || !command.CommandText.Contains("conversation_turns", StringComparison.Ordinal)
+                || Interlocked.Increment(ref turnInsertCommands) != 2)
+                return;
+            blocked.TrySetResult();
+            try
+            {
+                await release.Task.WaitAsync(cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                canceled.TrySetResult();
+                throw;
+            }
+        }
+    }
+
+    private sealed class FixtureRealtimeConversationPersistence(
+        DurablePathFixture fixture,
+        DbCommandInterceptor? commandInterceptor) : IRealtimeConversationPersistence
+    {
+        public Task<ConversationStatusProjection> CreateAsync(CreateConversation command, CancellationToken cancellationToken) =>
+            ExecuteAsync(service => service.CreateAsync(command, cancellationToken));
+        public Task<ConversationStatusProjection> ActivateAsync(ChangeConversationState command, CancellationToken cancellationToken) =>
+            ExecuteAsync(service => service.ActivateAsync(command, cancellationToken));
+        public Task<ConversationStatusProjection> GetAsync(Guid tenantId, Guid conversationId, CancellationToken cancellationToken) =>
+            ExecuteAsync(service => service.GetAsync(tenantId, conversationId, cancellationToken));
+        public Task<IReadOnlyList<LiveTranscriptTurn>> GetTranscriptAsync(Guid tenantId, Guid conversationId, CancellationToken cancellationToken) =>
+            ExecuteAsync(service => service.GetTranscriptAsync(tenantId, conversationId, cancellationToken));
+        public Task<LiveTranscriptTurn> AddCallerTurnAsync(AddConversationTurn command, CancellationToken cancellationToken) =>
+            ExecuteAsync(service => service.AddCallerTurnAsync(command, cancellationToken));
+        public Task<LiveTranscriptTurn> AddAssistantTurnAsync(AddConversationTurn command, CancellationToken cancellationToken) =>
+            ExecuteAsync(service => service.AddAssistantTurnAsync(command, cancellationToken));
+        public Task<CompletedConversationSummary> CompleteAsync(CompleteConversation command, CancellationToken cancellationToken) =>
+            ExecuteAsync(service => service.CompleteAsync(command, cancellationToken));
+        public Task<ConversationStatusProjection> FailAsync(ChangeConversationState command, CancellationToken cancellationToken) =>
+            ExecuteAsync(service => service.FailAsync(command, cancellationToken));
+
+        private async Task<T> ExecuteAsync<T>(Func<ConversationService, Task<T>> operation)
+        {
+            await using CallManagementDbContext calls = fixture.CreateCalls();
+            await using ConversationDbContext conversations = commandInterceptor is null
+                ? fixture.CreateConversations()
+                : new ConversationDbContext(new DbContextOptionsBuilder<ConversationDbContext>()
+                    .UseNpgsql(fixture.ConnectionString)
+                    .AddInterceptors(commandInterceptor)
+                    .Options);
+            var callService = new CallManagementService(calls, TimeProvider.System);
+            var conversationService = new ConversationService(conversations, callService, TimeProvider.System);
+            return await operation(conversationService);
+        }
+    }
+
+    private sealed class RecordingVoiceSessionDiagnostics : IVoiceSessionDiagnostics
+    {
+        public void RecordException(VoiceSessionExceptionDiagnostic diagnostic) { }
     }
 
     private sealed class ControlledSpeechRecognizer : ISpeechRecognizer

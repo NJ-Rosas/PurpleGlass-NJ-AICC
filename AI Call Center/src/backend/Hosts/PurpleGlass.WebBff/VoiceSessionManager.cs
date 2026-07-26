@@ -133,6 +133,22 @@ public sealed partial class BffVoiceSessionStateSink(
         Guid locationId, string provider, string providerCallId, Guid correlationId, string safeCode);
 }
 
+public sealed partial class BffVoiceSessionDiagnostics(ILogger<BffVoiceSessionDiagnostics> logger)
+    : IVoiceSessionDiagnostics
+{
+    public void RecordException(VoiceSessionExceptionDiagnostic diagnostic) =>
+        LogSessionException(logger, diagnostic.CallId, diagnostic.ConversationId,
+            diagnostic.TenantId, diagnostic.LocationId, diagnostic.Provider,
+            diagnostic.ProviderCallId, diagnostic.CorrelationId, diagnostic.Stage,
+            diagnostic.SafeCode, diagnostic.ExceptionType, diagnostic.RootExceptionType);
+
+    [LoggerMessage(204, LogLevel.Error,
+        "Realtime voice session exception; CallId={CallId}, ConversationId={ConversationId}, TenantId={TenantId}, LocationId={LocationId}, Provider={Provider}, ProviderCallId={ProviderCallId}, CorrelationId={CorrelationId}, Stage={Stage}, SafeCode={SafeCode}, ExceptionType={ExceptionType}, RootExceptionType={RootExceptionType}.")]
+    private static partial void LogSessionException(ILogger logger, Guid callId, Guid? conversationId,
+        Guid tenantId, Guid locationId, string provider, string providerCallId, Guid correlationId,
+        string stage, string safeCode, string exceptionType, string rootExceptionType);
+}
+
 public sealed class VoiceSessionConflictException(string code) : Exception("A voice session is already active for this call.")
 {
     public string Code { get; } = code;

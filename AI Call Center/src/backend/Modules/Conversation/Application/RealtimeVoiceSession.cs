@@ -9,13 +9,14 @@ using PurpleGlass.Observability;
 namespace PurpleGlass.Modules.Conversation.Application;
 
 public sealed class RealtimeVoiceSession(
-    ConversationService conversations,
+    IRealtimeConversationPersistence conversations,
     ISpeechRecognizer speechRecognizer,
     IAiConversationRuntime languageModel,
     ISpeechSynthesizer speechSynthesizer,
     RealtimeVoiceOptions options,
     IVoiceSessionStateSink stateSink,
-    TimeProvider timeProvider)
+    TimeProvider timeProvider,
+    IVoiceSessionDiagnostics diagnostics)
 {
     private const string FallbackResponse = "I'm sorry, I'm having trouble responding right now.";
     private readonly object synchronization = new();
@@ -126,8 +127,15 @@ public sealed class RealtimeVoiceSession(
             transportDisconnected = receiveTask.IsCompletedSuccessfully;
             source.Cancel();
             await Task.WhenAll(receiveTask, detectTask, processTask);
-            await CompleteConversationAsync(stopReason, false);
-            await PublishStateAsync(VoiceSessionState.Ended, null, CancellationToken.None);
+            string? completionFailure = await CompleteConversationAsync(stopReason, false);
+            if (completionFailure is null)
+                await PublishStateAsync(VoiceSessionState.Ended, null, CancellationToken.None);
+            else
+            {
+                failed = true;
+                RecordFailure(completionFailure);
+                await PublishStateAsync(VoiceSessionState.Failed, completionFailure, CancellationToken.None);
+            }
         }
         catch (OperationCanceledException) when (sessionToken.IsCancellationRequested)
         {
@@ -136,17 +144,30 @@ public sealed class RealtimeVoiceSession(
             if (!cancellationToken.IsCancellationRequested && !explicitlyStopped
                 && !transportDisconnected && stopReason == "media_disconnected")
                 stopReason = "maximum_duration";
-            await CompleteConversationAsync(stopReason, false);
-            await PublishStateAsync(VoiceSessionState.Ended, null, CancellationToken.None);
+            string? completionFailure = await CompleteConversationAsync(stopReason, false);
+            if (completionFailure is null)
+                await PublishStateAsync(VoiceSessionState.Ended, null, CancellationToken.None);
+            else
+            {
+                failed = true;
+                RecordFailure(completionFailure);
+                await PublishStateAsync(VoiceSessionState.Failed, completionFailure, CancellationToken.None);
+            }
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
             failed = true;
-            string code = exception is VoicePipelineException pipeline ? pipeline.Code : "voice_session_failed";
+            string code = exception switch
+            {
+                VoicePipelineException pipeline => pipeline.Code,
+                VoicePersistenceException persistence => persistence.Code,
+                _ => "voice_session_failed",
+            };
+            ReportException(exception, "voice_session", code);
             sessionActivity?.SetStatus(ActivityStatusCode.Error, code);
             RecordFailure(code);
             await PublishStateAsync(VoiceSessionState.Failed, code, CancellationToken.None);
-            await CompleteConversationAsync(code, true);
+            _ = await CompleteConversationAsync(code, true);
         }
         finally
         {
@@ -317,11 +338,13 @@ public sealed class RealtimeVoiceSession(
                 callerTurnId, recognizedText, recognition.Confidence,
                 CausationId: callerTurnId, TraceId: Activity.Current?.TraceId.ToString(),
                 StartedAtUtc: recognition.StartedAtUtc ?? utterance.StartedAtUtc,
-                EndedAtUtc: recognition.EndedAtUtc ?? utterance.EndedAtUtc), operation.Token);
+                EndedAtUtc: recognition.EndedAtUtc ?? utterance.EndedAtUtc), sessionToken);
 
-            conversation = await conversations.GetAsync(sessionIdentity.TenantId, conversation.ConversationId, operation.Token);
+            operation.Token.ThrowIfCancellationRequested();
+
+            conversation = await conversations.GetAsync(sessionIdentity.TenantId, conversation.ConversationId, sessionToken);
             IReadOnlyList<LiveTranscriptTurn> transcript = await conversations.GetTranscriptAsync(
-                sessionIdentity.TenantId, conversation.ConversationId, operation.Token);
+                sessionIdentity.TenantId, conversation.ConversationId, sessionToken);
             await PublishStateAsync(VoiceSessionState.Thinking, null, operation.Token);
             AiResponseResult response = await GenerateAsync(context, transcript, recognizedText, operation.Token);
             if (response.Failure is not null)
@@ -332,7 +355,8 @@ public sealed class RealtimeVoiceSession(
             _ = await conversations.AddAssistantTurnAsync(new AddConversationTurn(
                 sessionIdentity.TenantId, conversation.ConversationId, conversation.Version,
                 assistantTurnId, assistantText,
-                CausationId: utterance.TurnId, TraceId: Activity.Current?.TraceId.ToString()), operation.Token);
+                CausationId: utterance.TurnId, TraceId: Activity.Current?.TraceId.ToString()), sessionToken);
+            operation.Token.ThrowIfCancellationRequested();
             await SpeakAsync(assistantText, operation, operation.Token);
             await PublishStateAsync(VoiceSessionState.Listening, null, operation.Token);
         }
@@ -522,20 +546,20 @@ public sealed class RealtimeVoiceSession(
             timeProvider.GetUtcNow()), cancellationToken);
     }
 
-    private async Task CompleteConversationAsync(string outcome, bool fail)
+    private async Task<string?> CompleteConversationAsync(string outcome, bool fail)
     {
-        if (!conversationId.HasValue || identity is null) return;
+        if (!conversationId.HasValue || identity is null) return null;
         using var cleanup = new CancellationTokenSource(options.CleanupTimeout);
         try
         {
             ConversationStatusProjection current = await conversations.GetAsync(identity.TenantId, conversationId.Value, cleanup.Token);
-            if (current.State is "Completed" or "Failed") return;
+            if (current.State is "Completed" or "Failed") return null;
             if (fail)
             {
                 _ = await conversations.FailAsync(new ChangeConversationState(
                     identity.TenantId, current.ConversationId, current.Version,
                     TraceId: Activity.Current?.TraceId.ToString()), cleanup.Token);
-                return;
+                return null;
             }
             IReadOnlyList<LiveTranscriptTurn> transcript = await conversations.GetTranscriptAsync(
                 identity.TenantId, current.ConversationId, cleanup.Token);
@@ -546,8 +570,35 @@ public sealed class RealtimeVoiceSession(
             _ = await conversations.CompleteAsync(new CompleteConversation(
                 identity.TenantId, current.ConversationId, current.Version, summary,
                 TraceId: Activity.Current?.TraceId.ToString()), cleanup.Token);
+            return null;
         }
-        catch (Exception) { }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            return ReportException(exception, fail ? "conversation_fail" : "conversation_complete",
+                "voice_persistence_failed");
+        }
+        catch (OperationCanceledException exception)
+        {
+            return ReportException(exception, fail ? "conversation_fail" : "conversation_complete",
+                "voice_persistence_failed");
+        }
+    }
+
+    private string ReportException(Exception exception, string fallbackStage, string fallbackCode)
+    {
+        string code = exception is VoicePersistenceException persistence
+            ? persistence.Code : fallbackCode;
+        string stage = exception is VoicePersistenceException persistenceFailure
+            ? persistenceFailure.Stage : fallbackStage;
+        VoiceSessionIdentity sessionIdentity = identity
+            ?? throw new InvalidOperationException("Voice session identity is unavailable.");
+        diagnostics.RecordException(new VoiceSessionExceptionDiagnostic(
+            sessionIdentity.CallId, conversationId,
+            sessionIdentity.TenantId, sessionIdentity.LocationId,
+            sessionIdentity.Provider, sessionIdentity.ProviderCallId,
+            sessionIdentity.CorrelationId, stage, code,
+            exception.GetType().Name, exception.GetBaseException().GetType().Name));
+        return code;
     }
 
     private RuntimeInvocationContext RuntimeContext(Guid causationId) => new(

@@ -40,6 +40,8 @@ public static class RealtimeVoiceServiceCollectionExtensions
 
         services.AddSingleton(options);
         services.AddSingleton<IVoiceSessionStateSink, BffVoiceSessionStateSink>();
+        services.AddSingleton<IVoiceSessionDiagnostics, BffVoiceSessionDiagnostics>();
+        services.AddSingleton<IRealtimeConversationPersistence, ScopedRealtimeConversationPersistence>();
         services.AddScoped<RealtimeVoiceSession>();
         services.AddSingleton<VoiceSessionManager>();
         services.AddSingleton(new TwilioRealtimeAudioOptions().Validate());

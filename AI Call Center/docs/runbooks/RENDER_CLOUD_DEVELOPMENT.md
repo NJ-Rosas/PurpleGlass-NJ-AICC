@@ -88,17 +88,23 @@ PurpleGlass uses these exact provider routes:
 
 Set the Twilio number's incoming Voice webhook to the inbound URL only when inbound calling is required. PurpleGlass reconstructs signature inputs from the canonical public base URL rather than Render's internal HTTP representation. `X-Twilio-Signature` verification is mandatory for all three webhooks and the media WebSocket.
 
+### Task 10 live evidence and remaining validation
+
+A controlled synthetic Task 10 call has already proven this path in the Render environment: outbound submission to Twilio, phone answer, signed answer/status callbacks, bidirectional Media Stream establishment, realtime conversation creation, OpenAI TTS, an audible initial greeting, inbound caller audio, OpenAI STT returning successfully, and the recognized caller turn appearing in the persisted call review and realtime-connected dashboard. Do not repeat those provider transactions merely to reconfirm an earlier checkpoint.
+
+The remaining one-call validation is the multi-turn boundary: after the greeting, verify a caller turn is persisted, the fake language model produces an agent response, the response is persisted and synthesized, a second caller/agent turn succeeds, normal hangup completes both the call and conversation, and the completed durable state survives refresh. The realtime implementation uses a fresh short database scope for each mutation; it does not retain a `DbContext` or transaction across speech duration, OpenAI calls, WebSocket I/O, or TTS playback.
+
 For an existing Blueprint, use this exact workflow:
 
-1. Push the branch/commit containing the updated `render.yaml`.
+1. Push the corrected Task 10 branch/commit. Sync the Blueprint only when that commit changes `render.yaml`; an application-only deploy does not require a no-op Blueprint sync.
 2. Confirm the Render Blueprint tracks that branch and commit.
-3. Sync the Blueprint configuration.
+3. If `render.yaml` changed, sync the Blueprint configuration.
 4. Confirm all required `sync: false` secret values already exist; enter missing values manually without exposing them.
 5. Deploy both services from the same intended commit.
 6. Wake both free services through their `/health/live` endpoints.
 7. Require BFF `/health/live` to return HTTP 200.
 8. Require BFF `/health/ready` to return HTTP 200 with healthy PostgreSQL and telephony/voice checks.
-9. Only then sign in as the development administrator and perform the single Task 10 call to the verified trial recipient.
+9. Sign in again if the BFF restarted and its ephemeral Data Protection keys invalidated the old development session, then perform the single Task 10 call to the verified trial recipient.
 
 Do not place the call when Blueprint sync is pending, a required secret is missing, or readiness is not HTTP 200.
 
@@ -142,8 +148,8 @@ Run only after the automated phase passes and both services are awake. Confirm `
 
 1. Submit the outbound request through the administrator dashboard and record the internal call ID and start time.
 2. Confirm the worker persists the Twilio Call SID, the signed answer callback returns XML containing the canonical `wss://<public-host>/telephony/twilio/media` URL, and the signed status callback advances the existing call.
-3. Confirm the media stream remains connected while the conversation is active, audio flows through STT → language model → TTS, and the dashboard updates over SSE.
-4. Hang up once through the dashboard or complete the call normally. Confirm the final call state, failure metadata if applicable, conversation summary/outcome, audit record, and outbox completion persist.
+3. Confirm the media stream remains connected while the conversation is active. Verify at least two complete caller → STT → persisted caller turn → fake language-model response → persisted agent turn → TTS cycles, with the dashboard updating over SSE.
+4. Hang up once through the dashboard or complete the call normally. Confirm both `CallSession` and `Conversation` reach their normal completed states and that transcript metadata, summary/outcome, audit record, and outbox completion persist after a browser refresh.
 5. Correlate PurpleGlass and Twilio timestamps. If provider/account policy ends the call, record the Twilio error code and prove PurpleGlass did not request the termination.
 
 Do not retry a live call to diagnose a failure. Inspect the signed callback responses, Twilio Call log, Render logs, persisted safe state, and worker/outbox state first.
@@ -158,6 +164,7 @@ Do not retry a live call to diagnose a failure. Inspect the signed callback resp
 - **Twilio 403/signature failure:** make `Telephony__PublicBaseUrl` exactly match the external callback origin and verify the Twilio secret values; never disable validation.
 - **Call action disabled with `voice_media_provider_incompatible`:** the BFF is using `Fake` or `Disabled` speech with real Twilio. Configure the BFF's OpenAI speech settings listed above and verify `/health/ready` before trying again. Do not retry a live call while readiness is degraded.
 - **OpenAI unavailable:** verify the provider selectors, safety switches, and `OpenAI__ApiKey`. Fake providers require no key.
+- **Realtime persistence failure:** correlate the structured `Realtime voice session exception` entry by internal CallId, ConversationId, CorrelationId, stage, safe code, and exception type. `voice_persistence_conflict`, `conversation_state_conflict`, and `voice_persistence_failed` distinguish durable failures without exposing SQL values or transcript text. Do not retry a live call until the failing stage is understood.
 - **Session disappeared:** a BFF restart replaced its ephemeral Data Protection keys; clear stale cookies and sign in again.
 - **Render deployment health failed:** check BFF `/health/live` and sanitized startup logs. After deployment, check `/health/ready`; if it is not healthy, restore the affected operational dependency before an experiment.
 
