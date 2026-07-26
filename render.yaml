@@ -8,7 +8,6 @@ services:
     dockerfilePath: ./AI Call Center/deploy/render/Dockerfile.web
     healthCheckPath: /health/ready
     preDeployCommand: dotnet /app/migrations/PurpleGlass.Migrations.dll
-    maxShutdownDelaySeconds: 60
     autoDeployTrigger: checksPass
     numInstances: 1
     disk:
