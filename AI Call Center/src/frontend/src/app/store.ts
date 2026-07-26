@@ -1,8 +1,9 @@
 import { configureStore } from '@reduxjs/toolkit'
 import { prototypeApi } from '../services/prototypeApi'
+import { sessionReducer } from './sessionSlice'
 
 export const store = configureStore({
-  reducer: { [prototypeApi.reducerPath]: prototypeApi.reducer },
+  reducer: { session: sessionReducer, [prototypeApi.reducerPath]: prototypeApi.reducer },
   middleware: (getDefaultMiddleware) => getDefaultMiddleware().concat(prototypeApi.middleware),
 })
 

@@ -56,6 +56,9 @@ public sealed class TenancyDbContext(DbContextOptions<TenancyDbContext> options)
 
     public void Add(AuditRecord record) => AuditRecords.Add(record);
 
+    async Task IAuditWriter.SaveChangesAsync(CancellationToken cancellationToken) =>
+        _ = await SaveChangesAsync(cancellationToken);
+
     async Task ITenancyStore.SaveChangesAsync(CancellationToken cancellationToken)
     {
         try
