@@ -16,6 +16,68 @@ namespace PurpleGlass.IntegrationTests;
 public sealed class DurablePathTests(DurablePathFixture fixture)
 {
     [Fact]
+    public async Task DeadLetterQueryIsPagedFilteredAndTenantLocationScoped()
+    {
+        Guid tenant = Guid.NewGuid();
+        Guid location = Guid.NewGuid();
+        Guid otherLocation = Guid.NewGuid();
+        OutboxMessage visible = DeadLetter(tenant, location, "VisibleType", "timeout");
+        OutboxMessage hidden = DeadLetter(tenant, otherLocation, "HiddenType", "network");
+        OutboxMessage pending = OutboxMessage.Create(tenant, location, "topic", "PendingType", "{\"secret\":\"never-return\"}", Guid.NewGuid(), DateTimeOffset.UtcNow);
+        await using (EventingDbContext seed = fixture.CreateEventing())
+        {
+            seed.AddRange(visible, hidden, pending);
+            _ = await seed.SaveChangesAsync();
+        }
+
+        await using EventingDbContext context = fixture.CreateEventing();
+        var service = new DeadLetterOperationsService(context, TimeProvider.System);
+        DeadLetterPage page = await service.QueryAsync(new DeadLetterQuery(
+            tenant, new HashSet<Guid> { location }, MessageType: "VisibleType", PageSize: 1), default);
+
+        DeadLetterSummary item = Assert.Single(page.Items);
+        Assert.Equal(visible.Id, item.MessageId);
+        Assert.Equal("Timeout", item.FailureCategory);
+        Assert.Equal(1, page.TotalCount);
+        Assert.DoesNotContain("secret", System.Text.Json.JsonSerializer.Serialize(page), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task DeadLetterRecoveryIsAtomicAndPreservesHistory()
+    {
+        Guid tenant = Guid.NewGuid();
+        Guid location = Guid.NewGuid();
+        OutboxMessage message = DeadLetter(tenant, location, "RecoveryType", "timeout");
+        await using (EventingDbContext seed = fixture.CreateEventing())
+        {
+            seed.Add(message);
+            _ = await seed.SaveChangesAsync();
+        }
+
+        Task<DeadLetterRecoveryResult> Recover() => Task.Run(async () =>
+        {
+            await using EventingDbContext context = fixture.CreateEventing();
+            return await new DeadLetterOperationsService(context, TimeProvider.System).RequeueAsync(
+                tenant, new HashSet<Guid> { location }, message.Id, "operator", Guid.NewGuid(), default);
+        });
+        DeadLetterRecoveryResult[] results = await Task.WhenAll(Recover(), Recover());
+        Assert.Single(results, result => result == DeadLetterRecoveryResult.Recovered);
+        Assert.Single(results, result => result == DeadLetterRecoveryResult.NotDeadLettered);
+
+        await using EventingDbContext verify = fixture.CreateEventing();
+        OutboxMessage persisted = await verify.OutboxMessages.SingleAsync(candidate => candidate.Id == message.Id);
+        Assert.Equal(OutboxMessage.PendingStatus, persisted.Status);
+        Assert.Equal(1, persisted.Attempts);
+        Assert.Equal("timeout", persisted.LastError);
+        Assert.NotNull(persisted.DeadLetteredAtUtc);
+        Assert.Equal(1, persisted.RecoveryCount);
+
+        IReadOnlyList<OutboxMessage> claimed = await new OutboxDispatcherStore(verify).ClaimBatchAsync(
+            Guid.NewGuid(), DateTimeOffset.UtcNow.AddMinutes(1), TimeSpan.FromMinutes(1), 100, default);
+        Assert.Contains(claimed, candidate => candidate.Id == message.Id);
+    }
+
+    [Fact]
     public async Task EmptyDatabaseMigrationsCreateEveryOwnedSchema()
     {
         await using CallManagementDbContext context = fixture.CreateCalls();
@@ -174,6 +236,17 @@ public sealed class DurablePathTests(DurablePathFixture fixture)
         }
 
         Assert.Equal(1, executions);
+    }
+
+    private static OutboxMessage DeadLetter(Guid tenant, Guid location, string type, string error)
+    {
+        DateTimeOffset now = DateTimeOffset.UtcNow.AddMinutes(-5);
+        OutboxMessage message = OutboxMessage.Create(tenant, location, "topic", type,
+            "{\"private\":\"payload\"}", Guid.NewGuid(), now);
+        Guid lease = Guid.NewGuid();
+        message.Claim(lease, now.AddMinutes(1));
+        message.MarkFailed(lease, error, now.AddMinutes(2), 1, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(2));
+        return message;
     }
 
     [Fact]

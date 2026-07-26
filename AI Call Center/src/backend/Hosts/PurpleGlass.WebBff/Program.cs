@@ -20,6 +20,8 @@ using PurpleGlass.Modules.Tenancy.Contracts;
 using PurpleGlass.Modules.Tenancy.Infrastructure;
 using PurpleGlass.WebBff;
 using PurpleGlass.Observability;
+using PurpleGlass.Eventing.Infrastructure;
+using System.Text.Json;
 using System.Threading.RateLimiting;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -123,6 +125,7 @@ builder.Services.AddScoped<SecurityAuditService>();
 builder.Services.AddScoped<TenancyService>();
 builder.Services.AddCallManagementInfrastructure(connectionString);
 builder.Services.AddConversationInfrastructure(connectionString);
+builder.Services.AddEventingInfrastructure(connectionString);
 builder.Services.AddSingleton<RealtimeEventHub>();
 builder.Services.AddHostedService<MqttRealtimeSubscriber>();
 builder.Services.AddHealthChecks().AddCheck<DatabaseHealthCheck>("postgres", tags: ["ready"]);
@@ -243,6 +246,51 @@ protectedBff.MapGet("/calls/{callId:guid}", async (
     var call = await calls.GetForLocationAsync(context.TenantId, context.LocationId, callId, cancellationToken);
     return Results.Ok(new { call, conversation = await conversations.GetDetailsForCallAsync(context.TenantId, callId, cancellationToken) });
 }).RequireAuthorization(SecurityPolicies.ViewTranscripts);
+protectedBff.MapGet("/operations/dead-letters", async (
+    [AsParameters] DeadLetterListRequest request, TrustedRequestContextAccessor accessor,
+    DeadLetterOperationsService service, CancellationToken cancellationToken) =>
+{
+    RequestContext context = accessor.Current;
+    return Results.Ok(await service.QueryAsync(new DeadLetterQuery(
+        context.TenantId, context.AuthorizedLocationIds ?? new HashSet<Guid>(), request.LocationId,
+        request.MessageType, request.FailureCategory, request.FromUtc, request.ToUtc,
+        request.MessageId, request.CorrelationId, request.TraceId, request.Page ?? 1, request.PageSize ?? 20), cancellationToken));
+}).RequireAuthorization(SecurityPolicies.ViewDeadLetters);
+protectedBff.MapGet("/operations/dead-letters/{messageId:guid}", async (
+    Guid messageId, TrustedRequestContextAccessor accessor, DeadLetterOperationsService service,
+    CancellationToken cancellationToken) =>
+{
+    RequestContext context = accessor.Current;
+    DeadLetterDetail? detail = await service.GetAsync(context.TenantId,
+        context.AuthorizedLocationIds ?? new HashSet<Guid>(), messageId, cancellationToken);
+    return detail is null ? Results.NotFound() : Results.Ok(detail);
+}).RequireAuthorization(SecurityPolicies.ViewDeadLetters);
+protectedBff.MapPost("/operations/dead-letters/{messageId:guid}/retry", async (
+    Guid messageId, HttpContext httpContext, IAntiforgery antiforgery,
+    TrustedRequestContextAccessor accessor, DeadLetterOperationsService service,
+    SecurityAuditService audit, RealtimeEventHub realtime, CancellationToken cancellationToken) =>
+{
+    await antiforgery.ValidateRequestAsync(httpContext);
+    RequestContext context = accessor.Current;
+    DeadLetterRecoveryResult result = await service.RequeueAsync(context.TenantId,
+        context.AuthorizedLocationIds ?? new HashSet<Guid>(), messageId,
+        context.ActorId, context.CorrelationId, cancellationToken);
+    string decision = result == DeadLetterRecoveryResult.Recovered ? "Allowed" : "Denied";
+    await audit.WriteAsync(context.TenantId, context.LocationId, context.ActorId,
+        result == DeadLetterRecoveryResult.Recovered ? "DeadLetterRequeued" : "DeadLetterRecoveryRejected",
+        "OutboxMessage", messageId.ToString("D"), decision, result.ToString(), context.CorrelationId, cancellationToken);
+    if (result == DeadLetterRecoveryResult.Recovered)
+    {
+        string payload = JsonSerializer.Serialize(new { messageId, status = "Pending", correlationId = context.CorrelationId });
+        realtime.Publish(new RealtimeEvent(context.TenantId, context.LocationId, context.CorrelationId,
+            messageId, "dead-letter-recovered", payload, System.Diagnostics.Activity.Current?.Id,
+            System.Diagnostics.Activity.Current?.TraceStateString));
+        return Results.Accepted($"/bff/v1/operations/dead-letters/{messageId}", new { result = "Recovered" });
+    }
+    return result == DeadLetterRecoveryResult.NotFound
+        ? Results.NotFound()
+        : Results.Conflict(new ProblemDetails { Status = 409, Title = "Dead letter is not recoverable", Extensions = { ["code"] = "not_dead_lettered" } });
+}).RequireAuthorization(SecurityPolicies.RecoverDeadLetters).RequireRateLimiting("security");
 protectedBff.MapGet("/events", async (HttpContext httpContext, RealtimeEventHub hub,
     TrustedRequestContextAccessor accessor, CancellationToken cancellationToken) =>
 {
@@ -286,6 +334,10 @@ namespace PurpleGlass.WebBff
 {
     public sealed record DevelopmentLoginRequest(string User);
     public sealed record SyntheticOutboundCallRequest(string IdempotencyKey, string FromNumber, string ToNumber);
+    public sealed record DeadLetterListRequest(
+        Guid? LocationId, string? MessageType, string? FailureCategory,
+        DateTimeOffset? FromUtc, DateTimeOffset? ToUtc, Guid? MessageId,
+        Guid? CorrelationId, string? TraceId, int? Page, int? PageSize);
 
     public static partial class SecurityLog
     {

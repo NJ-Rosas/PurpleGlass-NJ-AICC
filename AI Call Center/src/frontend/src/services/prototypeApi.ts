@@ -57,6 +57,38 @@ export interface ConversationDetails {
 
 export interface CallDetails { call: CallSummary; conversation?: ConversationDetails }
 
+export interface DeadLetterSummary {
+  messageId: string
+  tenantId: string
+  locationId: string
+  messageType: string
+  status: string
+  attemptCount: number
+  createdAtUtc: string
+  lastAttemptAtUtc?: string
+  deadLetteredAtUtc?: string
+  correlationId: string
+  traceId?: string
+  failureCategory: string
+  failureSummary: string
+  recoveryCount: number
+  lastRecoveredAtUtc?: string
+}
+
+export interface DeadLetterDetail {
+  message: DeadLetterSummary
+  causationId?: string
+  traceParent?: string
+  traceState?: string
+  producer: string
+  dataClassification: string
+  lastRecoveryCorrelationId?: string
+  recoverable: boolean
+}
+
+export interface DeadLetterPage { items: DeadLetterSummary[]; page: number; pageSize: number; totalCount: number }
+export interface DeadLetterFilters { locationId?: string; messageType?: string; failureCategory?: string; page?: number; pageSize?: number }
+
 const rawBaseQuery = fetchBaseQuery({ baseUrl: '/bff/v1', credentials: 'same-origin' })
 let csrfToken: string | undefined
 
@@ -91,7 +123,7 @@ const secureBaseQuery: BaseQueryFn<string | FetchArgs, unknown, FetchBaseQueryEr
 export const prototypeApi = createApi({
   reducerPath: 'prototypeApi',
   baseQuery: secureBaseQuery,
-  tagTypes: ['Session', 'TenantSummary', 'Calls'],
+  tagTypes: ['Session', 'TenantSummary', 'Calls', 'DeadLetters'],
   endpoints: (builder) => ({
     getSession: builder.query<SessionProjection, void>({ query: () => '/session', providesTags: ['Session'] }),
     developmentLogin: builder.mutation<void, 'administrator' | 'read-only'>({
@@ -106,10 +138,23 @@ export const prototypeApi = createApi({
     }),
     getCalls: builder.query<CallSummary[], void>({ query: () => '/calls?limit=20', providesTags: ['Calls'] }),
     getCallDetails: builder.query<CallDetails, string>({ query: (callId) => `/calls/${callId}`, providesTags: ['Calls'] }),
+    getDeadLetters: builder.query<DeadLetterPage, DeadLetterFilters>({
+      query: (filters) => ({ url: '/operations/dead-letters', params: filters }),
+      providesTags: ['DeadLetters'],
+    }),
+    getDeadLetter: builder.query<DeadLetterDetail, string>({
+      query: (messageId) => `/operations/dead-letters/${messageId}`,
+      providesTags: ['DeadLetters'],
+    }),
+    retryDeadLetter: builder.mutation<{ result: string }, string>({
+      query: (messageId) => ({ url: `/operations/dead-letters/${messageId}/retry`, method: 'POST' }),
+      invalidatesTags: ['DeadLetters'],
+    }),
   }),
 })
 
 export const {
   useGetSessionQuery, useDevelopmentLoginMutation, useLogoutMutation,
   useGetTenantSummaryQuery, useUpdateLocationNameMutation, useGetCallsQuery, useGetCallDetailsQuery,
+  useGetDeadLettersQuery, useGetDeadLetterQuery, useRetryDeadLetterMutation,
 } = prototypeApi

@@ -12,6 +12,7 @@ import {
 } from '../services/prototypeApi'
 import { store } from '../app/store'
 import { reportOperationalFailure } from '../services/operationalDiagnostics'
+import { DeadLetterOperations } from './DeadLetterOperations'
 
 export function App() {
   const { data: session, isLoading: sessionLoading, isError: sessionError, refetch: refetchSession } = useGetSessionQuery()
@@ -23,6 +24,7 @@ export function App() {
   const [realtime, setRealtime] = useState<'connecting' | 'live' | 'offline'>('connecting')
   const { data: calls = [], isLoading: callsLoading, isError: callsError } = useGetCallsQuery(undefined, { skip: !session })
   const [selectedCallId, setSelectedCallId] = useState<string>()
+  const [view, setView] = useState<'dashboard' | 'dead-letters'>('dashboard')
   const selectedCall = selectedCallId ?? calls[0]?.callId
   const { data: callDetails, isLoading: detailsLoading } = useGetCallDetailsQuery(selectedCall ?? '', {
     skip: !selectedCall,
@@ -56,6 +58,7 @@ export function App() {
       'conversation-completed',
     ]
     callEventTypes.forEach((eventType) => events.addEventListener(eventType, refreshCalls))
+    events.addEventListener('dead-letter-recovered', () => store.dispatch(prototypeApi.util.invalidateTags(['DeadLetters'])))
     return () => events.close()
   }, [session])
 
@@ -95,9 +98,9 @@ export function App() {
       <aside className="rail">
         <div className="mark">PG</div>
         <nav aria-label="Primary">
-          <button className="nav-active" aria-label="Dashboard">⌂</button>
+          <button className={view === 'dashboard' ? 'nav-active' : ''} aria-label="Dashboard" onClick={() => setView('dashboard')}>⌂</button>
           <button aria-label="Calls">☏</button>
-          <button aria-label="Patients">♙</button>
+          {session.permissions.includes('operations.deadletters.view') && <button className={view === 'dead-letters' ? 'nav-active' : ''} aria-label="Dead letters" onClick={() => setView('dead-letters')}>!</button>}
           <button aria-label="Settings">⚙</button>
         </nav>
         <button className="avatar" onClick={endSession} aria-label="Log out">{session.displayName.slice(0, 2).toUpperCase()}</button>
@@ -113,10 +116,11 @@ export function App() {
           <div className={`status ${realtime}`}><span /> {realtime === 'live' ? 'Realtime connected' : realtime}</div>
         </header>
 
-        {isLoading && <section className="panel">Loading the prototype workspace…</section>}
+        {view === 'dead-letters' && <DeadLetterOperations permissions={session.permissions} />}
+        {view === 'dashboard' && isLoading && <section className="panel">Loading the prototype workspace…</section>}
         {isError && <section className="panel error">The BFF is unavailable. Start the local backend and refresh.</section>}
 
-        {data && <>
+        {view === 'dashboard' && data && <>
           <section className="hero-card">
             <div>
               <p className="eyebrow">ACTIVE PRACTICE</p>

@@ -43,6 +43,10 @@ public static class PurpleGlassTelemetry
     public static readonly Counter<long> OutboxPublishFailures = Meter.CreateCounter<long>("purpleglass.outbox.publish.failures");
     public static readonly Counter<long> OutboxRetries = Meter.CreateCounter<long>("purpleglass.outbox.retries");
     public static readonly Counter<long> OutboxDeadLetters = Meter.CreateCounter<long>("purpleglass.outbox.deadletters");
+    public static readonly Counter<long> DeadLettersRequeued = Meter.CreateCounter<long>("purpleglass.deadletter.requeued");
+    public static readonly Counter<long> DeadLetterRequeueFailures = Meter.CreateCounter<long>("purpleglass.deadletter.requeue.failed");
+    public static readonly Counter<long> RecoveredMessagesCompleted = Meter.CreateCounter<long>("purpleglass.deadletter.recovered.completed");
+    public static readonly Counter<long> RecoveredMessagesFailed = Meter.CreateCounter<long>("purpleglass.deadletter.recovered.failed");
     public static readonly Counter<long> InboxProcessed = Meter.CreateCounter<long>("purpleglass.inbox.processed");
     public static readonly Counter<long> InboxDuplicates = Meter.CreateCounter<long>("purpleglass.inbox.duplicates");
     public static readonly Counter<long> InboxFailures = Meter.CreateCounter<long>("purpleglass.inbox.failures");

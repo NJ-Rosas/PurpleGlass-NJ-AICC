@@ -4,6 +4,11 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.EntityFrameworkCore;
+using PurpleGlass.Eventing;
+using PurpleGlass.Eventing.Infrastructure;
+using PurpleGlass.Modules.Tenancy.Infrastructure;
 using PurpleGlass.WebBff;
 
 namespace PurpleGlass.IntegrationTests;
@@ -124,6 +129,69 @@ public sealed class WebBffSecurityTests : IClassFixture<SecurityWebApplicationFa
     {
         using HttpClient client = factory.CreateClient();
         Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/bff/v1/events")).StatusCode);
+    }
+
+    [Fact]
+    public async Task ReadOnlyUserCannotListOrRecoverDeadLetters()
+    {
+        using HttpClient client = factory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true });
+        await LoginAsync(client, "read-only");
+        Assert.Equal(HttpStatusCode.Forbidden, (await client.GetAsync("/bff/v1/operations/dead-letters")).StatusCode);
+        string csrf = await GetCsrfAsync(client);
+        using var retry = new HttpRequestMessage(HttpMethod.Post, $"/bff/v1/operations/dead-letters/{Guid.NewGuid():D}/retry");
+        retry.Headers.Add("X-CSRF-TOKEN", csrf);
+        Assert.Equal(HttpStatusCode.Forbidden, (await client.SendAsync(retry)).StatusCode);
+    }
+
+    [Fact]
+    public async Task AdministratorCanInspectAndRecoverWithoutPayloadDisclosure()
+    {
+        OutboxMessage message = await SeedDeadLetterAsync(DevelopmentIdentityDirectory.TenantId, DevelopmentIdentityDirectory.LocationId);
+        using HttpClient client = factory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true });
+        await LoginAsync(client, "administrator");
+
+        string listJson = await client.GetStringAsync("/bff/v1/operations/dead-letters?page=1&pageSize=10");
+        Assert.Contains(message.Id.ToString("D"), listJson, StringComparison.OrdinalIgnoreCase);
+        string detailJson = await client.GetStringAsync($"/bff/v1/operations/dead-letters/{message.Id:D}");
+        Assert.DoesNotContain("private-payload", detailJson, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("\"payload\"", detailJson, StringComparison.OrdinalIgnoreCase);
+
+        string csrf = await GetCsrfAsync(client);
+        using var retry = new HttpRequestMessage(HttpMethod.Post, $"/bff/v1/operations/dead-letters/{message.Id:D}/retry");
+        retry.Headers.Add("X-CSRF-TOKEN", csrf);
+        Assert.Equal(HttpStatusCode.Accepted, (await client.SendAsync(retry)).StatusCode);
+
+        using IServiceScope scope = factory.Services.CreateScope();
+        EventingDbContext eventing = scope.ServiceProvider.GetRequiredService<EventingDbContext>();
+        OutboxMessage recovered = await eventing.OutboxMessages.AsNoTracking().SingleAsync(candidate => candidate.Id == message.Id);
+        Assert.Equal(OutboxMessage.PendingStatus, recovered.Status);
+        Assert.Equal(1, recovered.RecoveryCount);
+        TenancyDbContext tenancy = scope.ServiceProvider.GetRequiredService<TenancyDbContext>();
+        Assert.True(await tenancy.AuditRecords.AnyAsync(record => record.Action == "DeadLetterRequeued" && record.ResourceId == message.Id.ToString("D")));
+    }
+
+    [Fact]
+    public async Task CrossTenantDeadLetterLookupDoesNotDiscloseExistence()
+    {
+        OutboxMessage message = await SeedDeadLetterAsync(Guid.NewGuid(), Guid.NewGuid());
+        using HttpClient client = factory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true });
+        await LoginAsync(client, "administrator");
+        Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync($"/bff/v1/operations/dead-letters/{message.Id:D}")).StatusCode);
+    }
+
+    private async Task<OutboxMessage> SeedDeadLetterAsync(Guid tenantId, Guid locationId)
+    {
+        using IServiceScope scope = factory.Services.CreateScope();
+        EventingDbContext db = scope.ServiceProvider.GetRequiredService<EventingDbContext>();
+        DateTimeOffset now = DateTimeOffset.UtcNow.AddMinutes(-2);
+        OutboxMessage message = OutboxMessage.Create(tenantId, locationId, "topic", "SyntheticDeadLetter",
+            "{\"private-payload\":\"must-not-escape\"}", Guid.NewGuid(), now);
+        Guid lease = Guid.NewGuid();
+        message.Claim(lease, now.AddMinutes(1));
+        message.MarkFailed(lease, "timeout", now.AddMinutes(1), 1, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(2));
+        db.Add(message);
+        _ = await db.SaveChangesAsync();
+        return message;
     }
 
     private static async Task<string> GetCsrfAsync(HttpClient client)

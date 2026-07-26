@@ -45,9 +45,24 @@ namespace PurpleGlass.Modules.CallManagement.Infrastructure.Migrations
                         .HasMaxLength(50)
                         .HasColumnType("character varying(50)");
 
+                    b.Property<DateTimeOffset?>("DeadLetteredAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset?>("LastAttemptAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<string>("LastError")
                         .HasMaxLength(1000)
                         .HasColumnType("character varying(1000)");
+
+                    b.Property<DateTimeOffset?>("LastRecoveredAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("LastRecoveredBy")
+                        .HasColumnType("text");
+
+                    b.Property<Guid?>("LastRecoveryCorrelationId")
+                        .HasColumnType("uuid");
 
                     b.Property<Guid>("LocationId")
                         .HasColumnType("uuid");
@@ -74,6 +89,9 @@ namespace PurpleGlass.Modules.CallManagement.Infrastructure.Migrations
 
                     b.Property<DateTimeOffset?>("PublishedAtUtc")
                         .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("RecoveryCount")
+                        .HasColumnType("integer");
 
                     b.Property<int>("SchemaVersion")
                         .HasColumnType("integer");

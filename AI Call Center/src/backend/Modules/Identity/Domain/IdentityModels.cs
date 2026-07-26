@@ -19,6 +19,8 @@ public static class SecurityPermissions
     public const string ManageTenantSettings = "tenant.settings.manage";
     public const string ManageLocationSettings = "location.settings.manage";
     public const string ViewAuditRecords = "audit.view";
+    public const string ViewDeadLetters = "operations.deadletters.view";
+    public const string RecoverDeadLetters = "operations.deadletters.recover";
 
     public static IReadOnlySet<string> ForRole(MembershipRole role) => role switch
     {
@@ -37,7 +39,8 @@ public static class SecurityPermissions
     private static readonly HashSet<string> All =
     [
         ViewLiveCalls, ViewRecentCalls, ViewTranscripts, ViewSummaries, ViewRecordingMetadata,
-        InitiateOutboundCalls, ManageTenantSettings, ManageLocationSettings, ViewAuditRecords
+        InitiateOutboundCalls, ManageTenantSettings, ManageLocationSettings, ViewAuditRecords,
+        ViewDeadLetters, RecoverDeadLetters
     ];
 }
 

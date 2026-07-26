@@ -29,8 +29,10 @@ public sealed class EventingDbContext(DbContextOptions<EventingDbContext> option
         outbox.Property(entity => entity.TraceParent).HasMaxLength(100);
         outbox.Property(entity => entity.TraceState).HasMaxLength(512);
         outbox.Property(entity => entity.LastError).HasMaxLength(1_000);
+        outbox.Property(entity => entity.LastRecoveredBy).HasMaxLength(200);
         outbox.HasIndex(entity => new { entity.Status, entity.NextAttemptAtUtc, entity.LeaseExpiresAtUtc, entity.OccurredAtUtc });
         outbox.HasIndex(entity => new { entity.TenantId, entity.OccurredAtUtc });
+        outbox.HasIndex(entity => new { entity.TenantId, entity.Status, entity.DeadLetteredAtUtc });
     }
 
     public static void Configure(EntityTypeBuilder<InboxMessage> inbox)

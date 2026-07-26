@@ -2,6 +2,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\BuildingBlocks\PurpleGlass.Application.Abstractions\PurpleGlass.Application.Abstractions.csproj" />
+    <ProjectReference Include="..\..\BuildingBlocks\PurpleGlass.Eventing.Infrastructure\PurpleGlass.Eventing.Infrastructure.csproj" />
     <ProjectReference Include="..\..\BuildingBlocks\PurpleGlass.Observability\PurpleGlass.Observability.csproj" />
     <ProjectReference Include="..\..\Modules\CallManagement\Application\PurpleGlass.Modules.CallManagement.Application.csproj" />
     <ProjectReference Include="..\..\Modules\CallManagement\Contracts\PurpleGlass.Modules.CallManagement.Contracts.csproj" />

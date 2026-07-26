@@ -97,6 +97,7 @@ public sealed partial class Worker(
                     cancellationToken);
                 PurpleGlassTelemetry.MqttPublished.Add(1);
                 PurpleGlassTelemetry.OutboxPublishDuration.Record(timeProvider.GetElapsedTime(started).TotalMilliseconds);
+                if (message.RecoveryCount > 0) PurpleGlassTelemetry.RecoveredMessagesCompleted.Add(1);
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
             {
@@ -113,6 +114,8 @@ public sealed partial class Worker(
                 PurpleGlassTelemetry.MqttPublishFailures.Add(1);
                 PurpleGlassTelemetry.OutboxPublishDuration.Record(timeProvider.GetElapsedTime(started).TotalMilliseconds);
                 activity?.SetStatus(ActivityStatusCode.Error, TelemetrySanitizer.ErrorCode(exception));
+                if (message.RecoveryCount > 0 && message.Status == OutboxMessage.DeadLetterStatus)
+                    PurpleGlassTelemetry.RecoveredMessagesFailed.Add(1);
                 if (message.Status == OutboxMessage.DeadLetterStatus)
                 {
                     LogMessageDeadLettered(logger, message.Id, message.Attempts);

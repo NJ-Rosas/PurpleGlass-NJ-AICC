@@ -85,6 +85,10 @@ public sealed class OutboxMessage
 
     public DateTimeOffset? PublishedAtUtc { get; private set; }
 
+    public DateTimeOffset? LastAttemptAtUtc { get; private set; }
+
+    public DateTimeOffset? DeadLetteredAtUtc { get; private set; }
+
     public int Attempts { get; private set; }
 
     public string? LastError { get; private set; }
@@ -92,6 +96,14 @@ public sealed class OutboxMessage
     public Guid? LeaseId { get; private set; }
 
     public DateTimeOffset? LeaseExpiresAtUtc { get; private set; }
+
+    public int RecoveryCount { get; private set; }
+
+    public DateTimeOffset? LastRecoveredAtUtc { get; private set; }
+
+    public string? LastRecoveredBy { get; private set; }
+
+    public Guid? LastRecoveryCorrelationId { get; private set; }
 
     public static OutboxMessage Create(
         Guid tenantId,
@@ -147,9 +159,9 @@ public sealed class OutboxMessage
     {
         EnsureLease(leaseId);
         PublishedAtUtc = publishedAtUtc;
+        LastAttemptAtUtc = publishedAtUtc;
         Status = PublishedStatus;
         NextAttemptAtUtc = null;
-        LastError = null;
         Attempts++;
         ClearLease();
     }
@@ -168,11 +180,13 @@ public sealed class OutboxMessage
         ArgumentOutOfRangeException.ThrowIfLessThan(maximumRetryDelay, initialRetryDelay);
 
         LastError = error[..Math.Min(error.Length, 1_000)];
+        LastAttemptAtUtc = failedAtUtc;
         Attempts++;
         if (Attempts >= maximumAttempts)
         {
             Status = DeadLetterStatus;
             NextAttemptAtUtc = null;
+            DeadLetteredAtUtc = failedAtUtc;
         }
         else
         {
@@ -183,6 +197,22 @@ public sealed class OutboxMessage
             NextAttemptAtUtc = failedAtUtc.AddSeconds(delaySeconds);
         }
 
+        ClearLease();
+    }
+
+    public void Requeue(string actorId, Guid recoveryCorrelationId, DateTimeOffset recoveredAtUtc)
+    {
+        if (Status != DeadLetterStatus)
+            throw new InvalidOperationException("Only a dead-lettered outbox message can be requeued.");
+        if (string.IsNullOrWhiteSpace(actorId)) throw new ArgumentException("An actor identifier is required.", nameof(actorId));
+        if (recoveryCorrelationId == Guid.Empty) throw new ArgumentException("A recovery correlation identifier is required.", nameof(recoveryCorrelationId));
+
+        Status = PendingStatus;
+        NextAttemptAtUtc = recoveredAtUtc;
+        LastRecoveredAtUtc = recoveredAtUtc;
+        LastRecoveredBy = actorId[..Math.Min(actorId.Length, 200)];
+        LastRecoveryCorrelationId = recoveryCorrelationId;
+        RecoveryCount++;
         ClearLease();
     }
 

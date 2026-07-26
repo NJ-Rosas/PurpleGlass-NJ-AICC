@@ -10,6 +10,7 @@ public static class EventingInfrastructureExtensions
         services.AddDbContext<EventingDbContext>(options => options.UseNpgsql(connectionString));
         services.AddScoped<OutboxDispatcherStore>();
         services.AddScoped<InboxDeduplicationStore>();
+        services.AddScoped<DeadLetterOperationsService>();
         services.AddSingleton(TimeProvider.System);
         return services;
     }

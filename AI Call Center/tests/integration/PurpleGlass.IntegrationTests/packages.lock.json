@@ -702,6 +702,7 @@
           "MQTTnet": "[5.2.0.1603, )",
           "Microsoft.AspNetCore.Authentication.OpenIdConnect": "[10.0.10, )",
           "PurpleGlass.Application.Abstractions": "[1.0.0, )",
+          "PurpleGlass.Eventing.Infrastructure": "[1.0.0, )",
           "PurpleGlass.Modules.Audit.Application": "[1.0.0, )",
           "PurpleGlass.Modules.CallManagement.Application": "[1.0.0, )",
           "PurpleGlass.Modules.CallManagement.Contracts": "[1.0.0, )",

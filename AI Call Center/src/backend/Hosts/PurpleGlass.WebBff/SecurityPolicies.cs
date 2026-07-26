@@ -12,6 +12,8 @@ public static class SecurityPolicies
     public const string ViewTranscripts = "ViewTranscripts";
     public const string ManageLocation = "ManageLocation";
     public const string InitiateOutbound = "InitiateOutbound";
+    public const string ViewDeadLetters = "ViewDeadLetters";
+    public const string RecoverDeadLetters = "RecoverDeadLetters";
 
     public static IServiceCollection AddPurpleGlassAuthorization(this IServiceCollection services)
     {
@@ -25,6 +27,10 @@ public static class SecurityPolicies
                 new PermissionRequirement(SecurityPermissions.ManageLocationSettings)));
             options.AddPolicy(InitiateOutbound, policy => policy.RequireAuthenticatedUser().AddRequirements(
                 new PermissionRequirement(SecurityPermissions.InitiateOutboundCalls)));
+            options.AddPolicy(ViewDeadLetters, policy => policy.RequireAuthenticatedUser().AddRequirements(
+                new PermissionRequirement(SecurityPermissions.ViewDeadLetters)));
+            options.AddPolicy(RecoverDeadLetters, policy => policy.RequireAuthenticatedUser().AddRequirements(
+                new PermissionRequirement(SecurityPermissions.RecoverDeadLetters)));
         });
         services.AddScoped<IAuthorizationHandler, PermissionAuthorizationHandler>();
         return services;
