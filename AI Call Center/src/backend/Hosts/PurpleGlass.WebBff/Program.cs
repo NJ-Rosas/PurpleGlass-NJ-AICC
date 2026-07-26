@@ -199,6 +199,10 @@ app.MapHealthChecks("/health/ready", new()
 {
     Predicate = check => check.Tags.Contains("ready"),
     ResponseWriter = WriteHealthResponse,
+    ResultStatusCodes =
+    {
+        [HealthStatus.Degraded] = StatusCodes.Status503ServiceUnavailable,
+    },
 });
 
 app.Map("/telephony/twilio/media", async (
