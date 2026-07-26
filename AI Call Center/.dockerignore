@@ -1,0 +1,12 @@
+**/bin
+**/obj
+**/node_modules
+**/dist
+**/TestResults
+**/.vite
+**/coverage
+.git
+.env
+.env.*
+artifacts
+.artifacts

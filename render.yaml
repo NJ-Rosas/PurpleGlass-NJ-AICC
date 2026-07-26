@@ -1,0 +1,125 @@
+services:
+  - type: web
+    name: purpleglass-web
+    runtime: docker
+    plan: starter
+    region: oregon
+    dockerContext: ./AI Call Center
+    dockerfilePath: ./AI Call Center/deploy/render/Dockerfile.web
+    healthCheckPath: /health/ready
+    preDeployCommand: dotnet /app/migrations/PurpleGlass.Migrations.dll
+    maxShutdownDelaySeconds: 60
+    autoDeployTrigger: checksPass
+    numInstances: 1
+    disk:
+      name: purpleglass-web-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: ASPNETCORE_ENVIRONMENT
+        value: Development
+      - key: ConnectionStrings__Postgres
+        fromDatabase:
+          name: purpleglass-postgres
+          property: connectionString
+      - key: Mqtt__Host
+        fromService:
+          name: purpleglass-mqtt
+          type: pserv
+          property: host
+      - key: Mqtt__Port
+        value: 1883
+      - key: Security__RequireHttps
+        value: true
+      - key: Security__ForceSecureCookies
+        value: true
+      - key: Security__AllowDevelopmentAuthentication
+        value: true
+      - key: Security__AllowSyntheticDataOnly
+        value: true
+      - key: Security__DataProtectionKeysPath
+        value: /var/data/protection
+      - key: Providers__EnableRealTelephony
+        value: false
+      - key: Providers__EnableRealAI
+        value: false
+      - key: Providers__EnableRealSpeech
+        value: false
+      - key: Integrations__EnableOpenDental
+        value: false
+      - key: DataProtection__AllowSensitiveData
+        value: false
+      - key: Telephony__Provider
+        value: None
+      - key: Telephony__PublicBaseUrl
+        sync: false
+      - key: Telephony__Twilio__AccountSid
+        sync: false
+      - key: Telephony__Twilio__AuthToken
+        sync: false
+      - key: OpenAI__ApiKey
+        sync: false
+      - key: Security__ProductionOrigin
+        sync: false
+
+  - type: worker
+    name: purpleglass-integrations-worker
+    runtime: docker
+    plan: starter
+    region: oregon
+    dockerContext: ./AI Call Center
+    dockerfilePath: ./AI Call Center/deploy/render/Dockerfile.worker
+    maxShutdownDelaySeconds: 60
+    autoDeployTrigger: checksPass
+    envVars:
+      - key: DOTNET_ENVIRONMENT
+        value: Development
+      - key: ConnectionStrings__Postgres
+        fromDatabase:
+          name: purpleglass-postgres
+          property: connectionString
+      - key: Mqtt__Host
+        fromService:
+          name: purpleglass-mqtt
+          type: pserv
+          property: host
+      - key: Mqtt__Port
+        value: 1883
+      - key: Providers__EnableRealTelephony
+        value: false
+      - key: Telephony__Provider
+        value: None
+      - key: Telephony__PublicBaseUrl
+        sync: false
+      - key: Telephony__Twilio__AccountSid
+        sync: false
+      - key: Telephony__Twilio__AuthToken
+        sync: false
+
+  - type: pserv
+    name: purpleglass-mqtt
+    runtime: docker
+    plan: starter
+    region: oregon
+    dockerContext: ./AI Call Center
+    dockerfilePath: ./AI Call Center/deploy/render/Dockerfile.mqtt
+    autoDeployTrigger: checksPass
+    disk:
+      name: purpleglass-mqtt-data
+      mountPath: /mosquitto/data
+      sizeGB: 1
+
+  - type: keyvalue
+    name: purpleglass-valkey
+    plan: starter
+    region: oregon
+    ipAllowList: []
+    maxmemoryPolicy: noeviction
+
+databases:
+  - name: purpleglass-postgres
+    plan: basic-256mb
+    region: oregon
+    databaseName: purpleglass
+    user: purpleglass
+    ipAllowList: []

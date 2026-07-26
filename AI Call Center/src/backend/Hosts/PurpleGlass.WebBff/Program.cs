@@ -31,10 +31,11 @@ using PurpleGlass.Adapters.Telephony.Twilio;
 using PurpleGlass.Modules.CallManagement.Contracts;
 
 var builder = WebApplication.CreateBuilder(args);
+if (int.TryParse(builder.Configuration["PORT"], out int renderPort) && renderPort is > 0 and <= 65535)
+    builder.WebHost.UseUrls($"http://0.0.0.0:{renderPort}");
 builder.Services.AddPurpleGlassObservability(builder.Configuration, "PurpleGlass.WebBff", builder.Environment.EnvironmentName);
 
-string connectionString = builder.Configuration.GetConnectionString("Postgres")
-    ?? throw new InvalidOperationException("ConnectionStrings:Postgres is required.");
+string connectionString = builder.Configuration.RequireConnectionString();
 SecurityOptions security = builder.Configuration.GetSection(SecurityOptions.SectionName).Get<SecurityOptions>() ?? new();
 SafetyOptions safety = new()
 {
@@ -49,7 +50,7 @@ ProductionSecurityValidator.Validate(security, safety, builder.Environment, buil
 builder.WebHost.ConfigureKestrel(options => options.AddServerHeader = false);
 builder.Services.AddSingleton(security);
 IDataProtectionBuilder dataProtection = builder.Services.AddDataProtection().SetApplicationName("PurpleGlass.WebBff");
-if (builder.Environment.IsProduction())
+if (!string.IsNullOrWhiteSpace(security.DataProtectionKeysPath))
     dataProtection.PersistKeysToFileSystem(new DirectoryInfo(security.DataProtectionKeysPath));
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<TrustedRequestContextAccessor>();
@@ -73,8 +74,8 @@ authentication.AddCookie(options =>
     options.Cookie.Name = builder.Environment.IsDevelopment() ? "PurpleGlass.Dev.Session" : security.CookieName;
     options.Cookie.HttpOnly = true;
     options.Cookie.SameSite = SameSiteMode.Lax;
-    options.Cookie.SecurePolicy = builder.Environment.IsDevelopment()
-        ? CookieSecurePolicy.SameAsRequest : CookieSecurePolicy.Always;
+    options.Cookie.SecurePolicy = !builder.Environment.IsDevelopment() || security.ForceSecureCookies
+        ? CookieSecurePolicy.Always : CookieSecurePolicy.SameAsRequest;
     options.Cookie.Path = "/";
     options.ExpireTimeSpan = TimeSpan.FromMinutes(Math.Clamp(security.SessionMinutes, 5, 480));
     options.SlidingExpiration = false;
@@ -103,8 +104,8 @@ builder.Services.AddAntiforgery(options =>
     options.Cookie.Name = builder.Environment.IsDevelopment() ? "PurpleGlass.Dev.Csrf" : "__Host-PurpleGlass.Csrf";
     options.Cookie.HttpOnly = true;
     options.Cookie.SameSite = SameSiteMode.Strict;
-    options.Cookie.SecurePolicy = builder.Environment.IsDevelopment()
-        ? CookieSecurePolicy.SameAsRequest : CookieSecurePolicy.Always;
+    options.Cookie.SecurePolicy = !builder.Environment.IsDevelopment() || security.ForceSecureCookies
+        ? CookieSecurePolicy.Always : CookieSecurePolicy.SameAsRequest;
 });
 builder.Services.AddRateLimiter(options =>
 {
@@ -188,6 +189,9 @@ app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSecond
 app.UseAuthentication();
 app.UseMiddleware<TrustedRequestContextMiddleware>();
 app.UseAuthorization();
+
+app.UseDefaultFiles();
+app.UseStaticFiles();
 
 app.MapHealthChecks("/health/live", new() { Predicate = _ => false });
 app.MapHealthChecks("/health/ready", new() { Predicate = check => check.Tags.Contains("ready") });
@@ -532,6 +536,7 @@ protectedBff.MapGet("/events", async (HttpContext httpContext, RealtimeEventHub 
     }
 }).RequireAuthorization(SecurityPolicies.ViewCalls).RequireRateLimiting("sse");
 
+app.MapFallbackToFile("index.html");
 app.Run();
 
 static Task WriteSecurityError(HttpResponse response, int status, string code)

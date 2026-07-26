@@ -8,8 +8,7 @@ using PurpleGlass.Modules.CallManagement.Infrastructure;
 
 var builder = Host.CreateApplicationBuilder(args);
 builder.Services.AddPurpleGlassObservability(builder.Configuration, "PurpleGlass.Integrations.Worker", builder.Environment.EnvironmentName);
-string connectionString = builder.Configuration.GetConnectionString("Postgres")
-    ?? throw new InvalidOperationException("ConnectionStrings:Postgres is required.");
+string connectionString = builder.Configuration.RequireConnectionString();
 
 builder.Services.AddEventingInfrastructure(connectionString);
 builder.Services.AddCallManagementInfrastructure(connectionString);

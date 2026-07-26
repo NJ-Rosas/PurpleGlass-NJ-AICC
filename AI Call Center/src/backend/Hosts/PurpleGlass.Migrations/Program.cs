@@ -8,8 +8,7 @@ using PurpleGlass.Modules.Conversation.Infrastructure;
 using PurpleGlass.Modules.Tenancy.Infrastructure;
 
 var builder = Host.CreateApplicationBuilder(args);
-string connectionString = builder.Configuration.GetConnectionString("Postgres")
-    ?? "Host=localhost;Port=5433;Database=purpleglass;Username=purpleglass;Password=purpleglass_dev_only";
+string connectionString = builder.Configuration.RequireConnectionString();
 
 builder.Services.AddTenancyInfrastructure(connectionString);
 builder.Services.AddDbContext<EventingDbContext>(options => options.UseNpgsql(connectionString));

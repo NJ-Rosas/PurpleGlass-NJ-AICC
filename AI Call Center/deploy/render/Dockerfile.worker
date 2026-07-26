@@ -1,0 +1,9 @@
+FROM mcr.microsoft.com/dotnet/sdk:10.0-alpine AS build
+WORKDIR /src
+COPY . .
+RUN dotnet publish src/backend/Hosts/PurpleGlass.Integrations.Worker/PurpleGlass.Integrations.Worker.csproj -c Release -o /out --no-self-contained
+
+FROM mcr.microsoft.com/dotnet/runtime:10.0-alpine
+WORKDIR /app
+COPY --from=build /out ./
+ENTRYPOINT ["dotnet", "PurpleGlass.Integrations.Worker.dll"]

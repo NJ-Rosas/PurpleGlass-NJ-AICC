@@ -1,0 +1,20 @@
+FROM node:24-alpine AS frontend
+WORKDIR /src/frontend
+COPY src/frontend/package.json src/frontend/package-lock.json ./
+RUN npm ci
+COPY src/frontend/ ./
+RUN npm run build
+
+FROM mcr.microsoft.com/dotnet/sdk:10.0-alpine AS backend
+WORKDIR /src
+COPY . .
+RUN dotnet publish src/backend/Hosts/PurpleGlass.WebBff/PurpleGlass.WebBff.csproj -c Release -o /out --no-self-contained
+RUN dotnet publish src/backend/Hosts/PurpleGlass.Migrations/PurpleGlass.Migrations.csproj -c Release -o /migrations --no-self-contained
+COPY --from=frontend /src/frontend/dist /out/wwwroot
+
+FROM mcr.microsoft.com/dotnet/aspnet:10.0-alpine
+WORKDIR /app
+COPY --from=backend /out ./
+COPY --from=backend /migrations ./migrations/
+EXPOSE 10000
+ENTRYPOINT ["dotnet", "PurpleGlass.WebBff.dll"]

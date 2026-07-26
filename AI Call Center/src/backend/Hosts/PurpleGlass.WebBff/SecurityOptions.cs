@@ -6,6 +6,7 @@ public sealed class SecurityOptions
     public bool AllowDevelopmentAuthentication { get; init; }
     public bool AllowSyntheticDataOnly { get; init; } = true;
     public bool RequireHttps { get; init; } = true;
+    public bool ForceSecureCookies { get; init; }
     public string CookieName { get; init; } = "__Host-PurpleGlass.Session";
     public int SessionMinutes { get; init; } = 30;
     public string ProductionOrigin { get; init; } = string.Empty;
