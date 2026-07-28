@@ -1,26 +1,22 @@
-using System.Net;
-using System.Net.Http.Headers;
-using System.Net.Http.Json;
-using System.Text;
-using System.Text.Json;
-using System.Text.Json.Serialization;
 using PurpleGlass.Modules.Conversation.Application;
 
 namespace PurpleGlass.Adapters.AI.OpenAI;
 
 public sealed class OpenAiConversationRuntime : IAiConversationRuntime
 {
-    private static readonly JsonSerializerOptions SerializerOptions = new(JsonSerializerDefaults.Web)
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
-    };
-
-    private readonly HttpClient httpClient;
+    private const string BaselineInstructions =
+        "You are speaking with a caller by phone. Return plain conversational text without Markdown. " +
+        "Keep responses reasonably concise and usually ask one useful question at a time. " +
+        "Do not invent office information or patient data. Do not claim an appointment was created " +
+        "or that any external action was performed. Do not diagnose dental conditions or pretend tools exist.";
+    private readonly IOpenAiResponsesGateway gateway;
     private readonly OpenAiConversationOptions options;
 
-    public OpenAiConversationRuntime(HttpClient httpClient, OpenAiConversationOptions options)
+    public OpenAiConversationRuntime(
+        IOpenAiResponsesGateway gateway,
+        OpenAiConversationOptions options)
     {
-        this.httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
+        this.gateway = gateway ?? throw new ArgumentNullException(nameof(gateway));
         this.options = (options ?? throw new ArgumentNullException(nameof(options))).Validate();
     }
 
@@ -35,74 +31,42 @@ public sealed class OpenAiConversationRuntime : IAiConversationRuntime
 
         string callerText = request.CurrentCallerTurn.Trim();
         if (callerText.Length == 0)
-        {
             return Failure(request, "ai_request_invalid", "The assistant request was invalid.", false);
-        }
 
-        List<OpenAiInputMessage> messages = BuildMessages(request, callerText);
-        var payload = new OpenAiResponseRequest(
+        IReadOnlyList<OpenAiConversationMessage> messages = BuildMessages(request, callerText);
+        var providerRequest = new OpenAiResponsesRequest(
             options.Model,
-            request.Configuration.SystemPrompt,
+            BuildInstructions(request.Configuration),
             messages,
-            request.Configuration.MaximumOutputTokens,
-            false);
-        byte[] requestBody = JsonSerializer.SerializeToUtf8Bytes(payload, SerializerOptions);
-        if (requestBody.Length > options.MaximumRequestBodyBytes)
-        {
-            return Failure(request, "ai_request_too_large", "The assistant request was too large.", false);
-        }
-
-        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, options.ResponsesEndpoint)
-        {
-            Content = JsonContent.Create(payload, options: SerializerOptions),
-        };
-        httpRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", options.ApiKey);
-        httpRequest.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+            request.Configuration.MaximumOutputTokens);
 
         try
         {
-            using HttpResponseMessage response = await httpClient.SendAsync(
-                httpRequest,
-                HttpCompletionOption.ResponseHeadersRead,
-                cancellationToken);
-            if (!response.IsSuccessStatusCode)
-            {
-                return Failure(request, MapHttpFailure(response.StatusCode));
-            }
-
-            byte[] responseBody = await ReadBoundedAsync(
-                response.Content,
-                options.MaximumResponseBodyBytes,
-                cancellationToken);
-            using JsonDocument document = JsonDocument.Parse(responseBody);
-            string text = ExtractOutputText(document.RootElement).Trim();
+            OpenAiResponsesResult providerResult = await gateway.CreateAsync(providerRequest, cancellationToken);
+            string text = providerResult.OutputText.Trim();
             if (text.Length == 0)
-            {
                 return Failure(request, "ai_response_invalid", "The assistant returned an invalid response.", false);
-            }
 
-            if (text.Length > request.Configuration.MaximumResponseCharacters)
-            {
-                text = text[..request.Configuration.MaximumResponseCharacters].TrimEnd();
-            }
-
-            (int inputTokens, int outputTokens) = ReadUsage(document.RootElement);
+            text = VoiceResponsePolicy.Constrain(text, request.Configuration.MaximumResponseCharacters);
             return new AiResponseResult(
                 text,
                 null,
                 false,
                 null,
                 false,
-                new AiUsageMetadata(inputTokens, outputTokens, "tokens"),
-                request.Configuration.Version);
+                new AiUsageMetadata(providerResult.InputTokens, providerResult.OutputTokens, "tokens"),
+                request.Configuration.Version,
+                Provider: AdapterKey,
+                Model: providerResult.Model ?? options.Model,
+                ProviderRequestId: providerResult.RequestId);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
         }
-        catch (OperationCanceledException)
+        catch (OpenAiResponsesException exception)
         {
-            return Failure(request, "ai_timeout", "The assistant timed out.", true);
+            return Failure(request, MapProviderFailure(exception.StatusCode));
         }
         catch (HttpRequestException)
         {
@@ -112,21 +76,17 @@ public sealed class OpenAiConversationRuntime : IAiConversationRuntime
         {
             return Failure(request, "ai_network_failed", "The assistant provider is temporarily unavailable.", true);
         }
-        catch (JsonException)
-        {
-            return Failure(request, "ai_response_invalid", "The assistant returned an invalid response.", false);
-        }
-        catch (OpenAiResponseTooLargeException)
-        {
-            return Failure(request, "ai_response_too_large", "The assistant response exceeded the safe size limit.", false);
-        }
     }
 
-    private static List<OpenAiInputMessage> BuildMessages(AiResponseRequest request, string callerText)
+    internal static IReadOnlyList<OpenAiConversationMessage> BuildMessages(
+        AiResponseRequest request,
+        string callerText)
     {
         SanitizedConversationTurn[] history = request.ExistingTurns
+            .Where(turn => !string.IsNullOrWhiteSpace(turn.Text)
+                && (turn.Speaker.Equals("Caller", StringComparison.OrdinalIgnoreCase)
+                    || turn.Speaker.Equals("Assistant", StringComparison.OrdinalIgnoreCase)))
             .TakeLast(request.Configuration.MaximumHistoryTurns)
-            .Where(turn => !string.IsNullOrWhiteSpace(turn.Text))
             .ToArray();
         if (history.Length > 0
             && history[^1].Speaker.Equals("Caller", StringComparison.OrdinalIgnoreCase)
@@ -135,36 +95,46 @@ public sealed class OpenAiConversationRuntime : IAiConversationRuntime
             history = history[..^1];
         }
 
-        var messages = new List<OpenAiInputMessage>(history.Length + 1);
+        var messages = new List<OpenAiConversationMessage>(history.Length + 1);
         foreach (SanitizedConversationTurn turn in history)
         {
-            string? role = turn.Speaker.Equals("Caller", StringComparison.OrdinalIgnoreCase)
-                ? "user"
-                : turn.Speaker.Equals("Assistant", StringComparison.OrdinalIgnoreCase) ? "assistant" : null;
-            if (role is not null)
-            {
-                messages.Add(new OpenAiInputMessage(role, turn.Text.Trim()));
-            }
+            string role = turn.Speaker.Equals("Caller", StringComparison.OrdinalIgnoreCase)
+                ? "user" : "assistant";
+            messages.Add(new OpenAiConversationMessage(role, turn.Text.Trim()));
         }
 
-        messages.Add(new OpenAiInputMessage("user", callerText));
-        return messages;
+        messages.Add(new OpenAiConversationMessage("user", callerText));
+        return messages.TakeLast(request.Configuration.MaximumHistoryTurns).ToArray();
     }
 
-    private static RuntimeFailure MapHttpFailure(HttpStatusCode statusCode) => statusCode switch
+    internal static string BuildInstructions(ConversationRuntimeConfiguration configuration)
     {
-        HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden =>
-            new RuntimeFailure("ai_authentication_failed", "The assistant provider is not configured correctly.", false),
-        HttpStatusCode.RequestTimeout =>
-            new RuntimeFailure("ai_timeout", "The assistant timed out.", true),
-        HttpStatusCode.TooManyRequests =>
-            new RuntimeFailure("ai_rate_limited", "The assistant provider is temporarily busy.", true),
-        >= HttpStatusCode.InternalServerError =>
-            new RuntimeFailure("ai_provider_unavailable", "The assistant provider is temporarily unavailable.", true),
+        var parts = new List<string> { BaselineInstructions, configuration.SystemPrompt.Trim() };
+        if (!IsUnavailable(configuration.OfficeName))
+            parts.Add($"You represent the configured office or location named {configuration.OfficeName.Trim()}.");
+        if (!IsUnavailable(configuration.OfficeLocation))
+            parts.Add($"The trusted configured location is {configuration.OfficeLocation.Trim()}.");
+        parts.Add($"Use the configured call language {configuration.Language.Trim()}.");
+        return string.Join(' ', parts);
+    }
+
+    private static bool IsUnavailable(string value) =>
+        string.IsNullOrWhiteSpace(value)
+        || value.Trim().Equals("not configured", StringComparison.OrdinalIgnoreCase);
+
+    private static RuntimeFailure MapProviderFailure(int statusCode) => statusCode switch
+    {
+        401 or 403 => new RuntimeFailure(
+            "ai_authentication_failed", "The assistant provider is not configured correctly.", false),
+        408 => new RuntimeFailure("ai_timeout", "The assistant timed out.", true),
+        429 => new RuntimeFailure("ai_rate_limited", "The assistant provider is temporarily busy.", true),
+        >= 500 => new RuntimeFailure(
+            "ai_provider_unavailable", "The assistant provider is temporarily unavailable.", true),
+        0 => new RuntimeFailure("ai_network_failed", "The assistant provider is temporarily unavailable.", true),
         _ => new RuntimeFailure("ai_request_rejected", "The assistant provider rejected the request.", false),
     };
 
-    private static AiResponseResult Failure(AiResponseRequest request, RuntimeFailure failure) => new(
+    private AiResponseResult Failure(AiResponseRequest request, RuntimeFailure failure) => new(
         string.Empty,
         null,
         false,
@@ -172,121 +142,13 @@ public sealed class OpenAiConversationRuntime : IAiConversationRuntime
         false,
         new AiUsageMetadata(0, 0, "tokens"),
         request.Configuration.Version,
-        failure);
+        failure,
+        AdapterKey,
+        options.Model);
 
-    private static AiResponseResult Failure(
+    private AiResponseResult Failure(
         AiResponseRequest request,
         string code,
         string safeMessage,
         bool retryable) => Failure(request, new RuntimeFailure(code, safeMessage, retryable));
-
-    private static async Task<byte[]> ReadBoundedAsync(
-        HttpContent content,
-        int maximumBytes,
-        CancellationToken cancellationToken)
-    {
-        if (content.Headers.ContentLength > maximumBytes)
-        {
-            throw new OpenAiResponseTooLargeException();
-        }
-
-        await using Stream stream = await content.ReadAsStreamAsync(cancellationToken);
-        using var output = new MemoryStream(Math.Min(maximumBytes, 16 * 1024));
-        byte[] buffer = new byte[8 * 1024];
-        while (true)
-        {
-            int read = await stream.ReadAsync(buffer, cancellationToken);
-            if (read == 0)
-            {
-                return output.ToArray();
-            }
-
-            if (output.Length + read > maximumBytes)
-            {
-                throw new OpenAiResponseTooLargeException();
-            }
-
-            await output.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
-        }
-    }
-
-    private static string ExtractOutputText(JsonElement root)
-    {
-        if (root.TryGetProperty("output_text", out JsonElement direct)
-            && direct.ValueKind == JsonValueKind.String)
-        {
-            return direct.GetString() ?? string.Empty;
-        }
-
-        if (!root.TryGetProperty("output", out JsonElement output)
-            || output.ValueKind != JsonValueKind.Array)
-        {
-            return string.Empty;
-        }
-
-        var text = new StringBuilder();
-        foreach (JsonElement item in output.EnumerateArray())
-        {
-            if (!item.TryGetProperty("content", out JsonElement content)
-                || content.ValueKind != JsonValueKind.Array)
-            {
-                continue;
-            }
-
-            foreach (JsonElement part in content.EnumerateArray())
-            {
-                if (part.TryGetProperty("type", out JsonElement type)
-                    && type.ValueKind == JsonValueKind.String
-                    && type.GetString() == "output_text"
-                    && part.TryGetProperty("text", out JsonElement value)
-                    && value.ValueKind == JsonValueKind.String)
-                {
-                    if (text.Length > 0)
-                    {
-                        text.AppendLine();
-                    }
-
-                    text.Append(value.GetString());
-                }
-            }
-        }
-
-        return text.ToString();
-    }
-
-    private static (int InputTokens, int OutputTokens) ReadUsage(JsonElement root)
-    {
-        if (!root.TryGetProperty("usage", out JsonElement usage)
-            || usage.ValueKind != JsonValueKind.Object)
-        {
-            return (0, 0);
-        }
-
-        return (
-            ReadNonNegativeInt32(usage, "input_tokens"),
-            ReadNonNegativeInt32(usage, "output_tokens"));
-    }
-
-    private static int ReadNonNegativeInt32(JsonElement parent, string propertyName)
-    {
-        if (!parent.TryGetProperty(propertyName, out JsonElement value)
-            || value.ValueKind != JsonValueKind.Number
-            || !value.TryGetInt64(out long parsed))
-        {
-            return 0;
-        }
-
-        return (int)Math.Clamp(parsed, 0, int.MaxValue);
-    }
-
-    private sealed record OpenAiResponseRequest(
-        string Model,
-        string Instructions,
-        IReadOnlyList<OpenAiInputMessage> Input,
-        int MaxOutputTokens,
-        bool Store);
-
-    private sealed record OpenAiInputMessage(string Role, string Content);
-
-    private sealed class OpenAiResponseTooLargeException : Exception;
 }

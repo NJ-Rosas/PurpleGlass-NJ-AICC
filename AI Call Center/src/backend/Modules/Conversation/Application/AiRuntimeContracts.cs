@@ -22,7 +22,10 @@ public sealed record AiResponseResult(
     bool ShouldEndConversation,
     AiUsageMetadata Usage,
     string ConfigurationVersion,
-    RuntimeFailure? Failure = null);
+    RuntimeFailure? Failure = null,
+    string? Provider = null,
+    string? Model = null,
+    string? ProviderRequestId = null);
 
 public interface IAiConversationRuntime
 {

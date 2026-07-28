@@ -15,22 +15,16 @@ public sealed class OpenAiAdapterTests
         Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), "test-trace");
 
     [Fact]
-    public async Task ConversationMapsBoundedHistoryRequestAndUsageResult()
+    public async Task ConversationMapsBoundedOrderedHistoryAndUsageThroughResponsesGateway()
     {
-        JsonElement requestBody = default;
-        var handler = new RecordingHttpMessageHandler(async (request, cancellationToken) =>
+        OpenAiResponsesRequest? captured = null;
+        var gateway = new StubResponsesGateway((request, _) =>
         {
-            Assert.Equal(HttpMethod.Post, request.Method);
-            Assert.Equal("https://unit.openai.test/v1/responses", request.RequestUri?.AbsoluteUri);
-            AssertBearerAuthentication(request.Headers, "unit-test-key");
-            Assert.Contains(request.Headers.Accept, value => value.MediaType == "application/json");
-            requestBody = JsonDocument.Parse(await request.Content!.ReadAsByteArrayAsync(cancellationToken))
-                .RootElement.Clone();
-            return JsonResponse(HttpStatusCode.OK,
-                """{"output_text":"  A concise answer.  ","usage":{"input_tokens":12,"output_tokens":4}}""");
+            captured = request;
+            return Task.FromResult(new OpenAiResponsesResult(
+                "  A concise answer.  ", "resp_test", "gpt-4o-mini", 12, 4));
         });
-        using var httpClient = new HttpClient(handler);
-        var runtime = new OpenAiConversationRuntime(httpClient, ConversationOptions());
+        var runtime = new OpenAiConversationRuntime(gateway, ConversationOptions());
         ConversationRuntimeConfiguration configuration = Configuration() with
         {
             MaximumHistoryTurns = 3,
@@ -41,7 +35,9 @@ public sealed class OpenAiAdapterTests
             configuration,
             [
                 new SanitizedConversationTurn("Caller", "discarded old turn"),
-                new SanitizedConversationTurn("Assistant", "previous answer"),
+                new SanitizedConversationTurn("Assistant", "discarded old answer"),
+                new SanitizedConversationTurn("Caller", "recent question"),
+                new SanitizedConversationTurn("Assistant", "recent answer"),
                 new SanitizedConversationTurn("System", "must be ignored"),
                 new SanitizedConversationTurn("Caller", "current question"),
             ],
@@ -54,37 +50,25 @@ public sealed class OpenAiAdapterTests
         Assert.Null(result.Failure);
         Assert.Equal("A concise answer.", result.AssistantText);
         Assert.Equal(new AiUsageMetadata(12, 4, "tokens"), result.Usage);
-        Assert.Equal(configuration.Version, result.ConfigurationVersion);
-        Assert.Equal("gpt-4o-mini", requestBody.GetProperty("model").GetString());
-        Assert.Equal(configuration.SystemPrompt, requestBody.GetProperty("instructions").GetString());
-        Assert.Equal(96, requestBody.GetProperty("max_output_tokens").GetInt32());
-        Assert.False(requestBody.GetProperty("store").GetBoolean());
-        JsonElement[] input = requestBody.GetProperty("input").EnumerateArray().ToArray();
-        Assert.Equal(2, input.Length);
-        Assert.Equal("assistant", input[0].GetProperty("role").GetString());
-        Assert.Equal("previous answer", input[0].GetProperty("content").GetString());
-        Assert.Equal("user", input[1].GetProperty("role").GetString());
-        Assert.Equal("current question", input[1].GetProperty("content").GetString());
-        Assert.Equal(1, handler.InvocationCount);
+        Assert.Equal("openai", result.Provider);
+        Assert.Equal("gpt-4o-mini", result.Model);
+        Assert.Equal("resp_test", result.ProviderRequestId);
+        Assert.Equal(96, captured?.MaximumOutputTokens);
+        Assert.Equal("gpt-4o-mini", captured?.Model);
+        Assert.Contains("Development workspace", captured?.Instructions, StringComparison.Ordinal);
+        Assert.Collection(Assert.IsAssignableFrom<IReadOnlyList<OpenAiConversationMessage>>(captured?.Messages),
+            turn => Assert.Equal(new OpenAiConversationMessage("user", "recent question"), turn),
+            turn => Assert.Equal(new OpenAiConversationMessage("assistant", "recent answer"), turn),
+            turn => Assert.Equal(new OpenAiConversationMessage("user", "current question"), turn));
+        Assert.Equal(1, gateway.InvocationCount);
     }
 
     [Fact]
-    public async Task ConversationExtractsNestedOutputAndConstrainsAssistantText()
+    public async Task ConversationConstrainsCallerFacingOutput()
     {
-        const string providerResponse = """
-            {
-              "output": [
-                {"content": [
-                  {"type":"refusal","text":"ignored"},
-                  {"type":"output_text","text":"First sentence."},
-                  {"type":"output_text","text":"Second sentence."}
-                ]}
-              ]
-            }
-            """;
-        using var httpClient = new HttpClient(new RecordingHttpMessageHandler(
-            (_, _) => Task.FromResult(JsonResponse(HttpStatusCode.OK, providerResponse))));
-        var runtime = new OpenAiConversationRuntime(httpClient, ConversationOptions());
+        var runtime = new OpenAiConversationRuntime(
+            StubResponsesGateway.Returning("First sentence. Second sentence that is too long."),
+            ConversationOptions());
         AiResponseRequest request = ConversationRequest("question", Configuration() with
         {
             MaximumResponseCharacters = 20,
@@ -93,70 +77,75 @@ public sealed class OpenAiAdapterTests
         AiResponseResult result = await runtime.GenerateAsync(request, default);
 
         Assert.Null(result.Failure);
-        string combinedOutput = $"First sentence.{Environment.NewLine}Second sentence.";
-        Assert.Equal(combinedOutput[..20], result.AssistantText);
-        Assert.Equal(20, result.AssistantText.Length);
+        Assert.Equal("First sentence.", result.AssistantText);
+        Assert.InRange(result.AssistantText.Length, 1, 20);
     }
 
     [Fact]
-    public async Task ConversationRejectsOversizedResponseWithoutExposingProviderBody()
+    public async Task ConversationRejectsEmptyResponses()
     {
-        const int maximumBytes = 4 * 1024;
-        byte[] providerBody = Encoding.UTF8.GetBytes(new string('s', maximumBytes + 1));
-        using var httpClient = new HttpClient(new RecordingHttpMessageHandler((_, _) =>
-            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new ByteArrayContent(providerBody),
-            })));
-        var runtime = new OpenAiConversationRuntime(httpClient, ConversationOptions() with
-        {
-            MaximumResponseBodyBytes = maximumBytes,
-        });
+        var runtime = new OpenAiConversationRuntime(
+            StubResponsesGateway.Returning("   "), ConversationOptions());
 
         AiResponseResult result = await runtime.GenerateAsync(ConversationRequest("question"), default);
 
-        Assert.Equal("ai_response_too_large", result.Failure?.Code);
+        Assert.Equal("ai_response_invalid", result.Failure?.Code);
         Assert.False(result.Failure?.Retryable);
-        Assert.DoesNotContain(new string('s', 20), result.Failure?.SafeMessage, StringComparison.Ordinal);
     }
 
     [Theory]
-    [InlineData(HttpStatusCode.Unauthorized, "ai_authentication_failed", false)]
-    [InlineData(HttpStatusCode.TooManyRequests, "ai_rate_limited", true)]
-    [InlineData(HttpStatusCode.InternalServerError, "ai_provider_unavailable", true)]
-    [InlineData(HttpStatusCode.BadRequest, "ai_request_rejected", false)]
-    public async Task ConversationMapsHttpFailuresToSafeBoundedFailures(
-        HttpStatusCode statusCode,
+    [InlineData(401, "ai_authentication_failed", false)]
+    [InlineData(408, "ai_timeout", true)]
+    [InlineData(429, "ai_rate_limited", true)]
+    [InlineData(500, "ai_provider_unavailable", true)]
+    [InlineData(400, "ai_request_rejected", false)]
+    [InlineData(0, "ai_network_failed", true)]
+    public async Task ConversationMapsProviderFailuresToSafeBoundedFailures(
+        int statusCode,
         string expectedCode,
         bool retryable)
     {
-        const string sensitiveProviderBody = "provider-debug: secret-token-and-user-content";
-        using var httpClient = new HttpClient(new RecordingHttpMessageHandler((_, _) =>
-            Task.FromResult(JsonResponse(statusCode, sensitiveProviderBody))));
-        var runtime = new OpenAiConversationRuntime(httpClient, ConversationOptions());
+        var gateway = new StubResponsesGateway((_, _) =>
+            Task.FromException<OpenAiResponsesResult>(new OpenAiResponsesException(
+                statusCode, new InvalidOperationException("secret provider body"))));
+        var runtime = new OpenAiConversationRuntime(gateway, ConversationOptions());
 
         AiResponseResult result = await runtime.GenerateAsync(ConversationRequest("question"), default);
 
         Assert.Equal(expectedCode, result.Failure?.Code);
         Assert.Equal(retryable, result.Failure?.Retryable);
-        Assert.DoesNotContain("secret-token", result.Failure?.SafeMessage, StringComparison.Ordinal);
+        Assert.DoesNotContain("secret", result.Failure?.SafeMessage, StringComparison.OrdinalIgnoreCase);
         Assert.InRange(result.Failure?.SafeMessage.Length ?? 0, 1, 120);
+    }
+
+    [Fact]
+    public async Task ConversationMapsNetworkFailureWithoutLeakingException()
+    {
+        var gateway = new StubResponsesGateway((_, _) =>
+            Task.FromException<OpenAiResponsesResult>(new HttpRequestException("secret network detail")));
+        var runtime = new OpenAiConversationRuntime(gateway, ConversationOptions());
+
+        AiResponseResult result = await runtime.GenerateAsync(ConversationRequest("question"), default);
+
+        Assert.Equal("ai_network_failed", result.Failure?.Code);
+        Assert.DoesNotContain("secret", result.Failure?.SafeMessage, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
     public async Task ConversationPropagatesCallerCancellation()
     {
-        var handler = new RecordingHttpMessageHandler(async (_, cancellationToken) =>
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var gateway = new StubResponsesGateway(async (_, cancellationToken) =>
         {
+            started.TrySetResult();
             await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
-            return JsonResponse(HttpStatusCode.OK, "{}");
+            return new OpenAiResponsesResult(string.Empty, null, null, 0, 0);
         });
-        using var httpClient = new HttpClient(handler);
-        var runtime = new OpenAiConversationRuntime(httpClient, ConversationOptions());
+        var runtime = new OpenAiConversationRuntime(gateway, ConversationOptions());
         using var cancellation = new CancellationTokenSource();
         Task<AiResponseResult> operation = runtime.GenerateAsync(
             ConversationRequest("question"), cancellation.Token);
-        await handler.RequestStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
         cancellation.Cancel();
 
@@ -164,16 +153,12 @@ public sealed class OpenAiAdapterTests
     }
 
     [Fact]
-    public async Task ConversationMapsProviderTimeoutWithoutThrowing()
+    public void ConversationOpenAiSelectionRequiresCredential()
     {
-        using var httpClient = new HttpClient(new RecordingHttpMessageHandler(
-            (_, _) => Task.FromException<HttpResponseMessage>(new TaskCanceledException("provider timeout"))));
-        var runtime = new OpenAiConversationRuntime(httpClient, ConversationOptions());
+        InvalidOperationException exception = Assert.Throws<InvalidOperationException>(() =>
+            (ConversationOptions() with { ApiKey = string.Empty }).Validate());
 
-        AiResponseResult result = await runtime.GenerateAsync(ConversationRequest("question"), default);
-
-        Assert.Equal("ai_timeout", result.Failure?.Code);
-        Assert.True(result.Failure?.Retryable);
+        Assert.Contains("API key", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -530,6 +515,24 @@ public sealed class OpenAiAdapterTests
         byte[] FileBytes,
         string FileName,
         string FileContentType);
+
+    private sealed class StubResponsesGateway(
+        Func<OpenAiResponsesRequest, CancellationToken, Task<OpenAiResponsesResult>> response)
+        : IOpenAiResponsesGateway
+    {
+        public int InvocationCount { get; private set; }
+
+        public Task<OpenAiResponsesResult> CreateAsync(
+            OpenAiResponsesRequest request,
+            CancellationToken cancellationToken)
+        {
+            InvocationCount++;
+            return response(request, cancellationToken);
+        }
+
+        public static StubResponsesGateway Returning(string text) => new((request, _) =>
+            Task.FromResult(new OpenAiResponsesResult(text, "resp_test", request.Model, 1, 1)));
+    }
 
     private sealed class RecordingHttpMessageHandler(
         Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> responder) : HttpMessageHandler

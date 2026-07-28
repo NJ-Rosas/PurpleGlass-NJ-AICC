@@ -142,6 +142,14 @@ public sealed partial class BffVoiceSessionDiagnostics(ILogger<BffVoiceSessionDi
             diagnostic.ProviderCallId, diagnostic.CorrelationId, diagnostic.Stage,
             diagnostic.SafeCode, diagnostic.ExceptionType, diagnostic.RootExceptionType);
 
+    public void RecordModelTurn(ConversationModelTurnDiagnostic diagnostic) =>
+        LogModelTurn(logger, diagnostic.ConversationId, diagnostic.CallSessionId,
+            diagnostic.TenantId, diagnostic.LocationId, diagnostic.Provider, diagnostic.Model,
+            diagnostic.HistoryTurnCount, diagnostic.GenerationDurationMs,
+            diagnostic.ResultCategory, diagnostic.FallbackUsed,
+            diagnostic.ProviderRequestId ?? "none", diagnostic.InputTokenCount,
+            diagnostic.OutputTokenCount);
+
     public void RecordInboundTurn(VoiceInboundTurnDiagnostic diagnostic) =>
         LogInboundTurn(logger, diagnostic.CallId, diagnostic.CorrelationId,
             diagnostic.TurnId, diagnostic.InboundFrames, diagnostic.DurationMs,
@@ -166,6 +174,13 @@ public sealed partial class BffVoiceSessionDiagnostics(ILogger<BffVoiceSessionDi
     private static partial void LogSessionException(ILogger logger, Guid callId, Guid? conversationId,
         Guid tenantId, Guid locationId, string provider, string providerCallId, Guid correlationId,
         string stage, string safeCode, string exceptionType, string rootExceptionType);
+
+    [LoggerMessage(209, LogLevel.Information,
+        "Conversation model turn; ConversationId={ConversationId}, CallSessionId={CallSessionId}, TenantId={TenantId}, LocationId={LocationId}, Provider={Provider}, Model={Model}, HistoryTurnCount={HistoryTurnCount}, GenerationDurationMs={GenerationDurationMs}, ResultCategory={ResultCategory}, FallbackUsed={FallbackUsed}, ProviderRequestId={ProviderRequestId}, InputTokenCount={InputTokenCount}, OutputTokenCount={OutputTokenCount}.")]
+    private static partial void LogModelTurn(ILogger logger, Guid conversationId, Guid callSessionId,
+        Guid tenantId, Guid locationId, string provider, string model, int historyTurnCount,
+        double generationDurationMs, string resultCategory, bool fallbackUsed,
+        string providerRequestId, int inputTokenCount, int outputTokenCount);
 
     [LoggerMessage(205, LogLevel.Information,
         "Realtime inbound speech event; CallId={CallId}, CorrelationId={CorrelationId}, TurnId={TurnId}, Event={Event}, InboundFrames={InboundFrames}, DurationMs={DurationMs}, QualifiedSpeechMs={QualifiedSpeechMs}, NoiseFloor={NoiseFloor}, EnergyMetric={EnergyMetric}, SpeechQualified={SpeechQualified}, SttSubmitted={SttSubmitted}, DiscardReason={DiscardReason}.")]

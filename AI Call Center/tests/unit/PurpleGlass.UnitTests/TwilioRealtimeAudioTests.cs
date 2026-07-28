@@ -249,6 +249,26 @@ public sealed class TwilioRealtimeAudioTests
     }
 
     [Fact]
+    public void DeterministicConversationProviderRequiresNoOpenAiCredential()
+    {
+        IConfiguration configuration = BaseVoiceConfiguration()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["LanguageModel:Provider"] = "Deterministic",
+                ["OpenAI:ApiKey"] = string.Empty,
+            })
+            .Build();
+        var services = new ServiceCollection();
+        services.AddSingleton(TimeProvider.System);
+
+        services.AddRealtimeVoice(configuration);
+        using ServiceProvider provider = services.BuildServiceProvider();
+
+        Assert.Equal("deterministic",
+            provider.GetRequiredService<IAiConversationRuntime>().AdapterKey);
+    }
+
+    [Fact]
     public async Task MarkAcknowledgementCompletesPlaybackAndLateMarkAfterClearIsHarmless()
     {
         var socket = InitializedSocket();

@@ -252,11 +252,11 @@ These are the committed and one-click-launcher defaults:
 Providers__EnableRealAI=false
 Providers__EnableRealSpeech=false
 SpeechToText__Provider=Fake
-LanguageModel__Provider=Fake
+LanguageModel__Provider=Deterministic
 TextToSpeech__Provider=Fake
 ```
 
-Use `Disabled` instead of `Fake` for any individual selector to exercise safe provider-disabled behavior. The application starts without AI credentials in both modes. The one-click launcher also sets real telephony off and `Telephony__Provider=None`; it needs no new Task 9 process.
+Use `Disabled` instead of `Deterministic` for the language model, or instead of `Fake` for either speech selector, to exercise safe provider-disabled behavior. The application starts without an OpenAI credential when the language model is `Deterministic`. `Fake` remains accepted as a backwards-compatible language-model alias. The one-click launcher also sets real telephony off and `Telephony__Provider=None`; it needs no new Task 9 process.
 
 Relevant bounded voice settings are:
 
@@ -284,6 +284,8 @@ Voice__MaximumAudioBytesPerUtterance=640000
 ```
 
 ### Development-only OpenAI path
+
+LLM text generation uses the official `OpenAI` .NET SDK and its asynchronous `OpenAI.Responses.ResponsesClient` surface. The client is reused as a singleton, SDK retries are disabled so they cannot stack with the voice pipeline retry/timeout budget, tools are not configured, and provider-side conversation continuation is not used. Each finalized caller turn rebuilds a bounded, ordered context from PurpleGlass's tenant-scoped durable transcript. Known model failures produce one deterministic fallback through the normal assistant-turn persistence and TTS path.
 
 Real AI and speech are explicit Development-only opt-ins. First store credentials outside the repository from `AI Call Center`:
 

@@ -409,9 +409,11 @@ public sealed class RealtimeVoiceSession(
         turnActivity?.SetTag("voice.language", options.Conversation.Language);
         using CancellationTokenSource operation = BeginOperation(sessionToken);
         string result = "success";
+        Guid? callerTurnId = null;
+        ConversationStatusProjection? activeConversation = null;
         try
         {
-            Guid callerTurnId = DeterministicId(
+            callerTurnId = DeterministicId(
                 sessionIdentity.CallId, $"voice:caller:{utterance.TurnId:N}");
             diagnostics.RecordInboundTurn(new VoiceInboundTurnDiagnostic(
                 sessionIdentity.CallId,
@@ -426,7 +428,7 @@ public sealed class RealtimeVoiceSession(
                 SttSubmitted: true,
                 DiscardReason: null,
                 Event: "stt_submitted"));
-            RuntimeInvocationContext context = RuntimeContext(callerTurnId);
+            RuntimeInvocationContext context = RuntimeContext(callerTurnId.Value);
             SpeechRecognitionResult recognition = await RecognizeAsync(context, utterance, operation.Token);
             if (recognition.Failure is not null)
                 throw new VoicePipelineException(recognition.Failure.Code, recognition.Failure.SafeMessage);
@@ -438,14 +440,15 @@ public sealed class RealtimeVoiceSession(
                 sessionIdentity.TenantId, conversationId!.Value, operation.Token);
             _ = await conversations.AddCallerTurnAsync(new AddConversationTurn(
                 sessionIdentity.TenantId, conversation.ConversationId, conversation.Version,
-                callerTurnId, recognizedText, recognition.Confidence,
-                CausationId: callerTurnId, TraceId: Activity.Current?.TraceId.ToString(),
+                callerTurnId.Value, recognizedText, recognition.Confidence,
+                CausationId: callerTurnId.Value, TraceId: Activity.Current?.TraceId.ToString(),
                 StartedAtUtc: recognition.StartedAtUtc ?? utterance.StartedAtUtc,
                 EndedAtUtc: recognition.EndedAtUtc ?? utterance.EndedAtUtc), sessionToken);
 
             operation.Token.ThrowIfCancellationRequested();
 
             conversation = await conversations.GetAsync(sessionIdentity.TenantId, conversation.ConversationId, sessionToken);
+            activeConversation = conversation;
             IReadOnlyList<LiveTranscriptTurn> transcript = await conversations.GetTranscriptAsync(
                 sessionIdentity.TenantId, conversation.ConversationId, sessionToken);
             await PublishStateAsync(VoiceSessionState.Thinking, null, operation.Token);
@@ -458,7 +461,7 @@ public sealed class RealtimeVoiceSession(
             _ = await conversations.AddAssistantTurnAsync(new AddConversationTurn(
                 sessionIdentity.TenantId, conversation.ConversationId, conversation.Version,
                 assistantTurnId, assistantText,
-                CausationId: utterance.TurnId, TraceId: Activity.Current?.TraceId.ToString()), sessionToken);
+                CausationId: utterance.TurnId, TraceId: Activity.Current?.TraceId.ToString()), operation.Token);
             operation.Token.ThrowIfCancellationRequested();
             await SpeakAsync(assistantText, operation, operation.Token);
             await PublishStateAsync(VoiceSessionState.Listening, null, operation.Token);
@@ -475,7 +478,15 @@ public sealed class RealtimeVoiceSession(
             RecordFailure(result);
             await PublishStateAsync(VoiceSessionState.Failed, result, CancellationToken.None);
             if (!IsSynthesisFailure(result))
-                await TrySpeakFallbackAsync(sessionToken);
+            {
+                bool modelFailure = IsGenerationFailure(result)
+                    && callerTurnId.HasValue && activeConversation is not null;
+                if (modelFailure)
+                    await TryPersistAndSpeakFallbackAsync(
+                        activeConversation!, callerTurnId!.Value, utterance.TurnId, sessionToken);
+                else
+                    await TrySpeakFallbackAsync(sessionToken);
+            }
             if (!sessionToken.IsCancellationRequested)
                 await PublishStateAsync(VoiceSessionState.Listening, null, sessionToken);
         }
@@ -528,16 +539,36 @@ public sealed class RealtimeVoiceSession(
             .TakeLast(options.Conversation.MaximumHistoryTurns)
             .Select(turn => new SanitizedConversationTurn(turn.Speaker, turn.Text))
             .ToArray();
-        AiResponseResult result = await InvokeAsync(
-            "generate", options.LanguageModelTimeout,
-            token => languageModel.GenerateAsync(new AiResponseRequest(
-                context, options.Conversation, history, callerText, [],
-                new SafetyEscalationPolicy(options.Conversation.SafetyPolicyVersion,
-                    options.Conversation.EscalationKeywords, options.Conversation.UrgentKeywords)), token),
-            value => value.Failure, cancellationToken);
-        PurpleGlassTelemetry.AiDuration.Record(timeProvider.GetElapsedTime(startedAt).TotalMilliseconds,
-            new KeyValuePair<string, object?>("adapter", languageModel.AdapterKey));
-        return result;
+        try
+        {
+            AiResponseResult result = await InvokeAsync(
+                "generate", options.LanguageModelTimeout,
+                token => languageModel.GenerateAsync(new AiResponseRequest(
+                    context, options.Conversation, history, callerText, [],
+                    new SafetyEscalationPolicy(options.Conversation.SafetyPolicyVersion,
+                        options.Conversation.EscalationKeywords, options.Conversation.UrgentKeywords)), token),
+                value => value.Failure, cancellationToken);
+            double durationMs = timeProvider.GetElapsedTime(startedAt).TotalMilliseconds;
+            PurpleGlassTelemetry.AiDuration.Record(durationMs,
+                new KeyValuePair<string, object?>("adapter", languageModel.AdapterKey));
+            diagnostics.RecordModelTurn(new ConversationModelTurnDiagnostic(
+                context.ConversationId, context.CallId, context.TenantId, context.LocationId,
+                result.Provider ?? languageModel.AdapterKey, result.Model ?? "configured",
+                history.Length, durationMs, "success", false, result.ProviderRequestId,
+                result.Usage.InputUnits, result.Usage.OutputUnits));
+            return result;
+        }
+        catch (VoicePipelineException exception)
+        {
+            double durationMs = timeProvider.GetElapsedTime(startedAt).TotalMilliseconds;
+            PurpleGlassTelemetry.AiDuration.Record(durationMs,
+                new KeyValuePair<string, object?>("adapter", languageModel.AdapterKey));
+            diagnostics.RecordModelTurn(new ConversationModelTurnDiagnostic(
+                context.ConversationId, context.CallId, context.TenantId, context.LocationId,
+                languageModel.AdapterKey, "configured", history.Length, durationMs,
+                SafeCode(exception.Code), true, null, 0, 0));
+            throw;
+        }
     }
 
     private async Task SpeakAsync(
@@ -685,8 +716,41 @@ public sealed class RealtimeVoiceSession(
     private async Task TrySpeakFallbackAsync(CancellationToken cancellationToken)
     {
         try { await SpeakAsync(FallbackResponse, null, cancellationToken); }
-        catch (Exception exception) when (exception is not OperationCanceledException) { }
+        catch (VoicePipelineException) { }
     }
+
+    private async Task TryPersistAndSpeakFallbackAsync(
+        ConversationStatusProjection conversation,
+        Guid callerTurnId,
+        Guid causationId,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            Guid assistantTurnId = DeterministicId(identity!.CallId, $"voice:assistant:{callerTurnId:N}");
+            _ = await conversations.AddAssistantTurnAsync(new AddConversationTurn(
+                identity.TenantId, conversation.ConversationId, conversation.Version,
+                assistantTurnId, FallbackResponse,
+                CausationId: causationId, TraceId: Activity.Current?.TraceId.ToString()), cancellationToken);
+            await SpeakAsync(FallbackResponse, null, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (VoicePipelineException)
+        {
+            // Fallback is best-effort; the original bounded model failure remains observable.
+        }
+        catch (VoicePersistenceException)
+        {
+            // Fallback is best-effort; the original bounded model failure remains observable.
+        }
+    }
+
+    private static bool IsGenerationFailure(string code) =>
+        code.StartsWith("ai_", StringComparison.Ordinal)
+        || code.StartsWith("generate_", StringComparison.Ordinal);
 
     private async Task<T> InvokeAsync<T>(
         string operation,

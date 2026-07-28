@@ -1,5 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
+    <PackageReference Include="OpenAI" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\..\..\Modules\Conversation\Application\PurpleGlass.Modules.Conversation.Application.csproj" />
   </ItemGroup>
 </Project>

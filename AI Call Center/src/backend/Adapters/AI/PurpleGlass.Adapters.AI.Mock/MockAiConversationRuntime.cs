@@ -9,7 +9,7 @@ public sealed class MockAiConversationRuntime(MockAiOptions options, TimeProvide
     private const string GenericTestResponse =
         "Thanks for the test message. This development assistant can continue a general voice conversation.";
 
-    public string AdapterKey => "mock-ai";
+    public string AdapterKey => "deterministic";
 
     public async Task<AiResponseResult> GenerateAsync(AiResponseRequest request, CancellationToken cancellationToken)
     {

@@ -28,10 +28,26 @@ public sealed class VoicePersistenceException(
 public interface IVoiceSessionDiagnostics
 {
     void RecordException(VoiceSessionExceptionDiagnostic diagnostic);
+    void RecordModelTurn(ConversationModelTurnDiagnostic diagnostic) { }
     void RecordInboundTurn(VoiceInboundTurnDiagnostic diagnostic) { }
     void RecordOutboundResponse(VoiceOutboundResponseDiagnostic diagnostic) { }
     void RecordPlaybackEvent(VoicePlaybackEventDiagnostic diagnostic) { }
 }
+
+public sealed record ConversationModelTurnDiagnostic(
+    Guid ConversationId,
+    Guid CallSessionId,
+    Guid TenantId,
+    Guid LocationId,
+    string Provider,
+    string Model,
+    int HistoryTurnCount,
+    double GenerationDurationMs,
+    string ResultCategory,
+    bool FallbackUsed,
+    string? ProviderRequestId,
+    int InputTokenCount,
+    int OutputTokenCount);
 
 public sealed record VoiceInboundTurnDiagnostic(
     Guid CallId,

@@ -49,7 +49,7 @@ services:
       - key: TextToSpeech__Provider
         value: OpenAI
       - key: LanguageModel__Provider
-        value: Fake
+        value: Deterministic
       - key: Integrations__EnableOpenDental
         value: false
       - key: DataProtection__AllowSensitiveData

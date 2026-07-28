@@ -21,8 +21,11 @@ public sealed record ConversationRuntimeConfiguration
     public int MaximumResponseCharacters { get; init; } = 400;
     public decimal SpeakingRate { get; init; } = 1.0m;
     public string SystemPrompt { get; init; } =
-        "You are the PurpleGlass development voice assistant. Respond clearly and briefly. " +
-        "Do not claim to perform actions or access systems that are not available.";
+        "You represent the configured dental office or location on a phone call. " +
+        "Answer conversationally and keep spoken responses reasonably concise. " +
+        "Usually ask one useful question at a time. Do not invent office information or patient data. " +
+        "Do not claim an appointment was created or that any external action was performed. " +
+        "Do not diagnose dental conditions or pretend tools exist. Return plain conversational text without Markdown.";
     public Dictionary<string, string> ApprovedResponses { get; init; } =
         new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
     public string[] EscalationKeywords { get; init; } = [];

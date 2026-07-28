@@ -95,6 +95,40 @@ public sealed class RealtimeVoicePipelineTests(DurablePathFixture fixture)
     }
 
     [Fact]
+    public async Task ModelContextIsTenantScopedAndExcludesAnotherTenantHistory()
+    {
+        const string tenantASecret = "Tenant A private conversation marker";
+        var tenantAModel = new ControlledAiRuntime();
+        await using (SessionHarness tenantA = await CreateHarnessAsync(languageModel: tenantAModel))
+        {
+            Task tenantARun = tenantA.Start();
+            _ = await tenantA.States.WaitForAsync(change => change.State == VoiceSessionState.Listening);
+            await tenantA.Transport.QueueUtteranceAsync(tenantASecret);
+            _ = await tenantA.States.WaitForOccurrencesAsync(VoiceSessionState.Listening, 2);
+            tenantA.Transport.CompleteInput();
+            await tenantARun.WaitAsync(TestTimeout);
+            await AssertCompletedAndDisposedAsync(tenantA, "media_disconnected");
+        }
+
+        var tenantBModel = new ControlledAiRuntime();
+        await using SessionHarness tenantB = await CreateHarnessAsync(languageModel: tenantBModel);
+        Task tenantBRun = tenantB.Start();
+        _ = await tenantB.States.WaitForAsync(change => change.State == VoiceSessionState.Listening);
+        await tenantB.Transport.QueueUtteranceAsync("Tenant B question");
+        _ = await tenantB.States.WaitForOccurrencesAsync(VoiceSessionState.Listening, 2);
+        tenantB.Transport.CompleteInput();
+        await tenantBRun.WaitAsync(TestTimeout);
+
+        AiResponseRequest request = Assert.Single(tenantBModel.Requests);
+        Assert.Equal(tenantB.TenantId, request.Context.TenantId);
+        Assert.Equal(tenantB.LocationId, request.Context.LocationId);
+        Assert.DoesNotContain(request.ExistingTurns,
+            turn => turn.Text.Contains(tenantASecret, StringComparison.Ordinal));
+        Assert.DoesNotContain(tenantASecret, request.CurrentCallerTurn, StringComparison.Ordinal);
+        await AssertCompletedAndDisposedAsync(tenantB, "media_disconnected");
+    }
+
+    [Fact]
     public async Task CallerBargeInClearsPlaybackCancelsCurrentSynthesisAndProcessesNextTurn()
     {
         var languageModel = new ControlledAiRuntime((_, invocation) =>
@@ -409,7 +443,7 @@ public sealed class RealtimeVoicePipelineTests(DurablePathFixture fixture)
     }
 
     [Fact]
-    public async Task LanguageModelFailureProducesSafeResponseAndFailureState()
+    public async Task LanguageModelFailurePersistsFallbackAndAllowsLaterTurns()
     {
         var languageModel = new ControlledAiRuntime(
             failureOnInvocation: 1,
@@ -422,15 +456,21 @@ public sealed class RealtimeVoicePipelineTests(DurablePathFixture fixture)
         VoiceSessionStateChange failed = await harness.States.WaitForAsync(
             change => change.State == VoiceSessionState.Failed);
         _ = await harness.States.WaitForOccurrencesAsync(VoiceSessionState.Listening, 2);
+        await harness.Transport.QueueUtteranceAsync("Continue after model failure");
+        _ = await harness.States.WaitForOccurrencesAsync(VoiceSessionState.Listening, 3);
         harness.Transport.CompleteInput();
         await run.WaitAsync(TestTimeout);
 
         Assert.Equal("ai_generation_failed", failed.SafeCode);
         Assert.Equal(FallbackResponse, harness.Synthesizer.Requests[1].Text);
         Assert.Contains(FallbackResponse, DecodeOutput(harness.Transport));
+        Assert.Equal(2, languageModel.Requests.Count);
+        Assert.Equal("Hello from the assistant.", harness.Synthesizer.Requests[2].Text);
         ConversationDetails details = await ReadDetailsAsync(harness.TenantId, harness.CallId);
-        Assert.Equal(GreetingCallerSpeakers,
+        Assert.Equal(["Assistant", "Caller", "Assistant", "Caller", "Assistant"],
             details.Transcript.OrderBy(turn => turn.SequenceNumber).Select(turn => turn.Speaker).ToArray());
+        Assert.Equal(FallbackResponse,
+            details.Transcript.Single(turn => turn.SequenceNumber == 3).Text);
         await AssertCompletedAndDisposedAsync(harness, "media_disconnected");
     }
 

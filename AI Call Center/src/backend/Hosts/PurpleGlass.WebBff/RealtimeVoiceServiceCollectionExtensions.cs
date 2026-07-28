@@ -1,10 +1,13 @@
 using System.Diagnostics;
+using OpenAI.Responses;
 using PurpleGlass.Adapters.AI.Mock;
 using PurpleGlass.Adapters.AI.OpenAI;
 using PurpleGlass.Adapters.Speech.Mock;
 using PurpleGlass.Adapters.Speech.OpenAI;
 using PurpleGlass.Adapters.Telephony.Twilio;
 using PurpleGlass.Modules.Conversation.Application;
+using System.ClientModel;
+using System.ClientModel.Primitives;
 
 namespace PurpleGlass.WebBff;
 
@@ -58,12 +61,13 @@ public static class RealtimeVoiceServiceCollectionExtensions
         services.AddSingleton<DisabledAiConversationRuntime>();
         services.AddSingleton<DisabledSpeechProvider>();
 
-        if (languageModel == "OpenAI") AddOpenAiConversation(services, configuration);
+        if (languageModel == "OpenAI") AddOpenAiConversation(
+            services, configuration, options.LanguageModelTimeout);
         if (speechToText == "OpenAI" || textToSpeech == "OpenAI") AddOpenAiSpeech(services, configuration);
 
         services.AddTransient<IAiConversationRuntime>(provider => languageModel switch
         {
-            "Fake" => provider.GetRequiredService<MockAiConversationRuntime>(),
+            "Deterministic" => provider.GetRequiredService<MockAiConversationRuntime>(),
             "OpenAI" => provider.GetRequiredService<OpenAiConversationRuntime>(),
             "Disabled" => provider.GetRequiredService<DisabledAiConversationRuntime>(),
             _ => throw new UnreachableException(),
@@ -85,15 +89,30 @@ public static class RealtimeVoiceServiceCollectionExtensions
         return services;
     }
 
-    private static void AddOpenAiConversation(IServiceCollection services, IConfiguration configuration)
+    private static void AddOpenAiConversation(
+        IServiceCollection services,
+        IConfiguration configuration,
+        TimeSpan networkTimeout)
     {
-        services.AddSingleton(new OpenAiConversationOptions
+        var options = new OpenAiConversationOptions
         {
             ApiKey = configuration["OpenAI:ApiKey"] ?? string.Empty,
             BaseUri = BaseUri(configuration),
             Model = configuration["OpenAI:LanguageModel"] ?? string.Empty,
-        }.Validate());
-        services.AddHttpClient<OpenAiConversationRuntime>(client => client.Timeout = Timeout.InfiniteTimeSpan);
+        }.Validate();
+        services.AddSingleton(options);
+#pragma warning disable OPENAI001
+        services.AddSingleton(new ResponsesClient(
+            new ApiKeyCredential(options.ApiKey),
+            new ResponsesClientOptions
+            {
+                Endpoint = options.BaseUri,
+                NetworkTimeout = networkTimeout,
+                RetryPolicy = new ClientRetryPolicy(0),
+            }));
+#pragma warning restore OPENAI001
+        services.AddSingleton<IOpenAiResponsesGateway, OpenAiResponsesGateway>();
+        services.AddSingleton<OpenAiConversationRuntime>();
     }
 
     private static void AddOpenAiSpeech(IServiceCollection services, IConfiguration configuration)
@@ -118,6 +137,8 @@ public static class RealtimeVoiceServiceCollectionExtensions
         string configured = configuration[$"{section}:Provider"]?.Trim() ?? "Disabled";
         return configured.ToLowerInvariant() switch
         {
+            "fake" when section == "LanguageModel" => "Deterministic",
+            "deterministic" when section == "LanguageModel" => "Deterministic",
             "fake" => "Fake",
             "openai" => "OpenAI",
             "disabled" or "none" => "Disabled",
@@ -127,7 +148,7 @@ public static class RealtimeVoiceServiceCollectionExtensions
 
     private static string AiAdapterKey(string provider) => provider switch
     {
-        "Fake" => "mock-ai",
+        "Deterministic" => "deterministic",
         "OpenAI" => "openai",
         "Disabled" => "disabled",
         _ => throw new UnreachableException(),
