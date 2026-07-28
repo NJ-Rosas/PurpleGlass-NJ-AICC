@@ -246,6 +246,40 @@ public sealed class WebBffSecurityTests : IClassFixture<SecurityWebApplicationFa
     }
 
     [Fact]
+    public async Task UnavailableWorkerRejectsOutboundBeforeDurableIntent()
+    {
+        await using var unavailableWorkerFactory = new SecurityWebApplicationFactory(
+            renderProxy: false, workerReady: false);
+        int operationsBefore;
+        using (IServiceScope beforeScope = unavailableWorkerFactory.Services.CreateScope())
+        {
+            CallManagementDbContext beforeCalls = beforeScope.ServiceProvider.GetRequiredService<CallManagementDbContext>();
+            operationsBefore = await beforeCalls.TelephonyOperations.CountAsync();
+        }
+        using HttpClient client = unavailableWorkerFactory.CreateClient(
+            new WebApplicationFactoryClientOptions { HandleCookies = true });
+        await LoginAsync(client, "administrator");
+        string csrf = await GetCsrfAsync(client);
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/bff/v1/calls/outbound")
+        {
+            Content = JsonContent.Create(new
+            {
+                locationId = DevelopmentIdentityDirectory.LocationId,
+                idempotencyKey = $"unavailable-{Guid.NewGuid():N}",
+                destinationNumber = "+17875551301",
+            }),
+        };
+        request.Headers.Add("X-CSRF-TOKEN", csrf);
+
+        HttpResponseMessage response = await client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        using IServiceScope afterScope = unavailableWorkerFactory.Services.CreateScope();
+        CallManagementDbContext afterCalls = afterScope.ServiceProvider.GetRequiredService<CallManagementDbContext>();
+        Assert.Equal(operationsBefore, await afterCalls.TelephonyOperations.CountAsync());
+    }
+
+    [Fact]
     public async Task AdministratorHangupCreatesOneDurableOperation()
     {
         Guid callId;
@@ -393,6 +427,7 @@ public sealed class SecurityWebApplicationFactory : WebApplicationFactory<WebBff
 {
     private readonly bool includeUnhealthyReadinessCheck;
     private readonly bool renderProxy;
+    private readonly bool workerReady = true;
 
     public SecurityWebApplicationFactory()
     {
@@ -401,10 +436,12 @@ public sealed class SecurityWebApplicationFactory : WebApplicationFactory<WebBff
     internal SecurityWebApplicationFactory(bool includeUnhealthyReadinessCheck) =>
         this.includeUnhealthyReadinessCheck = includeUnhealthyReadinessCheck;
 
-    internal SecurityWebApplicationFactory(bool renderProxy, bool includeUnhealthyReadinessCheck = false)
+    internal SecurityWebApplicationFactory(
+        bool renderProxy, bool includeUnhealthyReadinessCheck = false, bool workerReady = true)
     {
         this.renderProxy = renderProxy;
         this.includeUnhealthyReadinessCheck = includeUnhealthyReadinessCheck;
+        this.workerReady = workerReady;
     }
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
@@ -423,7 +460,13 @@ public sealed class SecurityWebApplicationFactory : WebApplicationFactory<WebBff
                 ["Security:RequireHttps"] = "false",
                 ["Security:ForceSecureCookies"] = renderProxy ? "true" : "false",
                 ["AllowedHosts"] = "localhost;127.0.0.1;purpleglass-web.onrender.com",
+                ["WorkerRuntime:ReadyUrl"] = "https://worker.test/health/ready",
+                ["WorkerRuntime:ReadyTimeoutSeconds"] = "5",
+                ["WorkerRuntime:PollMilliseconds"] = "250",
             }));
+        builder.ConfigureServices(services => services
+            .AddHttpClient(nameof(WorkerRuntimeGateway))
+            .ConfigurePrimaryHttpMessageHandler(() => new WorkerReadinessHandler(workerReady)));
         if (includeUnhealthyReadinessCheck)
         {
             builder.ConfigureServices(services => services.AddHealthChecks().AddCheck(
@@ -431,5 +474,14 @@ public sealed class SecurityWebApplicationFactory : WebApplicationFactory<WebBff
                 () => HealthCheckResult.Unhealthy("Synthetic dependency failure."),
                 tags: ["ready"]));
         }
+    }
+
+    private sealed class WorkerReadinessHandler(bool ready) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken) =>
+            Task.FromResult(new HttpResponseMessage(ready
+                ? HttpStatusCode.OK
+                : HttpStatusCode.ServiceUnavailable));
     }
 }

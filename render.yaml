@@ -7,7 +7,7 @@ services:
     dockerContext: ./AI Call Center
     dockerfilePath: ./AI Call Center/deploy/render/Dockerfile.web
     healthCheckPath: /health/live
-    autoDeployTrigger: checksPass
+    autoDeployTrigger: off
     numInstances: 1
     envVars:
       - key: AllowedHosts
@@ -64,6 +64,12 @@ services:
         sync: false
       - key: Telephony__Twilio__AuthToken
         sync: false
+      - key: WorkerRuntime__ReadyUrl
+        value: https://purpleglass-integrations-worker.onrender.com/health/ready
+      - key: WorkerRuntime__ReadyTimeoutSeconds
+        value: 75
+      - key: WorkerRuntime__PollMilliseconds
+        value: 1000
   - type: web
     name: purpleglass-integrations-worker
     runtime: docker
@@ -72,7 +78,7 @@ services:
     dockerContext: ./AI Call Center
     dockerfilePath: ./AI Call Center/deploy/render/Dockerfile.worker
     healthCheckPath: /health/live
-    autoDeployTrigger: checksPass
+    autoDeployTrigger: off
     numInstances: 1
     envVars:
       - key: DOTNET_ENVIRONMENT
@@ -101,6 +107,8 @@ services:
         sync: false
       - key: Telephony__Twilio__AuthToken
         sync: false
+      - key: Telephony__MaximumQueueAgeSeconds
+        value: 120
 databases:
   - name: purpleglass-postgres
     plan: free

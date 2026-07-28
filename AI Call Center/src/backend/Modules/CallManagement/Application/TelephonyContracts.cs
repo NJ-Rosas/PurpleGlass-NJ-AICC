@@ -58,4 +58,5 @@ public sealed record TelephonyDispatch(
     string Provider,
     string? ProviderCallId,
     string FromNumber,
-    string ToNumber);
+    string ToNumber,
+    DateTimeOffset CreatedAtUtc);

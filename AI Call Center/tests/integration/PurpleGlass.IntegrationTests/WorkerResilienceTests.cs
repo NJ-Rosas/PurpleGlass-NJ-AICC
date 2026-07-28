@@ -93,15 +93,37 @@ public sealed class WorkerResilienceTests(DurablePathFixture fixture)
         Assert.Single(harness.Provider.Calls);
     }
 
-    private async Task<TestHarness> CreateHarnessAsync()
+    [Fact]
+    public async Task StaleQueuedOutboundCallFailsWithoutContactingProvider()
     {
+        var clock = new AdjustableTimeProvider(DateTimeOffset.UtcNow);
+        TestHarness harness = await CreateHarnessAsync(clock);
+        clock.Advance(TimeSpan.FromMinutes(3));
+
+        Assert.True(await harness.Processor.ProcessNextAsync(default));
+        Assert.Empty(harness.Provider.Calls);
+
+        await using CallManagementDbContext verify = fixture.CreateCalls();
+        TelephonyOperation operation = await verify.TelephonyOperations.SingleAsync(
+            item => item.Id == harness.OperationId);
+        CallSession call = await verify.Calls.SingleAsync(
+            item => item.Id == new CallSessionId(harness.CallId));
+        Assert.Equal(TelephonyOperationState.Failed, operation.State);
+        Assert.Equal("telephony_runtime_unavailable", operation.SafeErrorCode);
+        Assert.Equal(CallState.Failed, call.State);
+        Assert.Equal("telephony_runtime_unavailable", call.Outcome);
+    }
+
+    private async Task<TestHarness> CreateHarnessAsync(TimeProvider? timeProvider = null)
+    {
+        timeProvider ??= TimeProvider.System;
         Guid tenant = Guid.NewGuid();
         Guid location = Guid.NewGuid();
         Guid callId;
         Guid operationId;
         await using (CallManagementDbContext seed = fixture.CreateCalls())
         {
-            var calls = new CallManagementService(seed, TimeProvider.System);
+            var calls = new CallManagementService(seed, timeProvider);
             _ = await calls.ConfigureTelephonyNumberAsync(new ConfigureTelephonyNumber(
                 tenant, location, "Fake", $"+1787{Random.Shared.Next(1000000, 9999999)}", null,
                 true, true, true), default);
@@ -124,8 +146,12 @@ public sealed class WorkerResilienceTests(DurablePathFixture fixture)
         ServiceProvider serviceProvider = services.BuildServiceProvider();
         var processor = new TelephonyDispatchProcessor(
             serviceProvider.GetRequiredService<IServiceScopeFactory>(), provider,
-            Options.Create(new TelephonyRuntimeOptions { PublicBaseUrl = "https://example.test" }),
-            TimeProvider.System, NullLogger<TelephonyDispatchProcessor>.Instance);
+            Options.Create(new TelephonyRuntimeOptions
+            {
+                PublicBaseUrl = "https://example.test",
+                MaximumQueueAgeSeconds = 120,
+            }),
+            timeProvider, NullLogger<TelephonyDispatchProcessor>.Instance);
         return new TestHarness(serviceProvider, processor, provider, faults, operationId, callId);
     }
 
@@ -145,6 +171,12 @@ public sealed class WorkerResilienceTests(DurablePathFixture fixture)
         public int? UnexpectedSave { get; set; }
         public Func<CancellationToken, Task>? BeforeFailure { get; set; }
         public int NextSave() => Interlocked.Increment(ref saveCount);
+    }
+
+    private sealed class AdjustableTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => utcNow;
+        public void Advance(TimeSpan duration) => utcNow += duration;
     }
 
     private sealed class FaultingCallStore(

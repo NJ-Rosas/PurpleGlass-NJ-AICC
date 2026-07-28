@@ -55,6 +55,17 @@ public sealed partial class TelephonyDispatchProcessor(
 
         if (dispatch is null) return false;
 
+        TimeSpan maximumQueueAge = TimeSpan.FromSeconds(Math.Clamp(settings.MaximumQueueAgeSeconds, 30, 900));
+        if (dispatch.OperationType == "StartOutbound"
+            && timeProvider.GetUtcNow() - dispatch.CreatedAtUtc > maximumQueueAge)
+        {
+            _ = await CompleteWithRecoveryAsync(
+                dispatch, null, "telephony_runtime_unavailable", cancellationToken);
+            LogStaleDispatchRejected(logger, dispatch.OperationId, dispatch.CallId,
+                dispatch.TenantId, dispatch.LocationId, maximumQueueAge.TotalSeconds);
+            return true;
+        }
+
         using Activity? activity = PurpleGlassTelemetry.Integrations.StartActivity(
             dispatch.OperationType == "Hangup" ? "telephony.call.hangup" : "telephony.outbound.start",
             ActivityKind.Consumer);
@@ -170,4 +181,9 @@ public sealed partial class TelephonyDispatchProcessor(
         Message = "Telephony completion concurrency retry budget exhausted; OperationId={OperationId}, CallId={CallId}, TenantId={TenantId}, LocationId={LocationId}, RetryAttempt={RetryAttempt}. The worker will continue without repeating the provider action.")]
     private static partial void LogDispatchConcurrencyExhausted(ILogger logger, Guid operationId, Guid callId,
         Guid tenantId, Guid locationId, int retryAttempt, Exception exception);
+
+    [LoggerMessage(EventId = 25, Level = LogLevel.Warning,
+        Message = "Stale outbound telephony operation rejected without contacting the provider; OperationId={OperationId}, CallId={CallId}, TenantId={TenantId}, LocationId={LocationId}, MaximumQueueAgeSeconds={MaximumQueueAgeSeconds}, Result=telephony_runtime_unavailable.")]
+    private static partial void LogStaleDispatchRejected(ILogger logger, Guid operationId, Guid callId,
+        Guid tenantId, Guid locationId, double maximumQueueAgeSeconds);
 }

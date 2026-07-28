@@ -117,6 +117,7 @@ public sealed class TelephonyWebApplicationFactory : WebApplicationFactory<WebBf
                 ["Telephony:PublicBaseUrl"] = "https://example.test",
                 ["Telephony:Twilio:AccountSid"] = TelephonyWebhookTests.AccountSid,
                 ["Telephony:Twilio:AuthToken"] = TelephonyWebhookTests.AuthToken,
+                ["WorkerRuntime:ReadyUrl"] = "https://worker.test/health/ready",
             }));
         builder.ConfigureServices(services =>
         {
@@ -131,6 +132,15 @@ public sealed class TelephonyWebApplicationFactory : WebApplicationFactory<WebBf
             });
             services.AddSingleton<ITelephonyProvider, TwilioTelephonyProvider>();
             services.AddSingleton<ITelephonyWebhookVerifier, TwilioWebhookVerifier>();
+            services.AddHttpClient(nameof(WorkerRuntimeGateway))
+                .ConfigurePrimaryHttpMessageHandler(() => new ReadyHandler());
         });
+    }
+
+    private sealed class ReadyHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
     }
 }

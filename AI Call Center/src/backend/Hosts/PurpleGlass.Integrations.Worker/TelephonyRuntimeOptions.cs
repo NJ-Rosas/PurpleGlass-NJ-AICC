@@ -6,4 +6,5 @@ public sealed class TelephonyRuntimeOptions
     public string Provider { get; init; } = "None";
     public string PublicBaseUrl { get; init; } = string.Empty;
     public int PollMilliseconds { get; init; } = 500;
+    public int MaximumQueueAgeSeconds { get; init; } = 120;
 }

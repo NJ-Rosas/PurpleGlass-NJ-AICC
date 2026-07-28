@@ -79,6 +79,14 @@ Only secret values remain manual. Store the Twilio SID, Twilio Auth Token, OpenA
 
 The fake speech adapter is simulator-only: it emits and accepts synthetic text frames and is not compatible with Twilio's 8 kHz media stream. PurpleGlass reports that combination as `voice_media_provider_incompatible`, marks readiness unavailable, disables the dashboard Call action, and rejects direct outbound requests before creating a durable/billable call.
 
+### Free-tier worker wake and stale-call safety
+
+When the integrations worker runs as a Render Free web service, MQTT and PostgreSQL activity do not wake it. The web BFF therefore probes the worker's configured `/health/ready` URL before it creates an outbound call. That probe wakes a sleeping worker and waits for PostgreSQL, MQTT, processing-loop, and telephony readiness. If readiness does not recover within the bounded window, the BFF returns `telephony_runtime_unavailable` and creates no durable or provider call.
+
+Signed inbound Twilio requests enqueue a background worker wake without delaying the TwiML response. The inbound request itself wakes the free web BFF, so the first webhook can still experience Render cold-start latency. Paid always-on services remain the production recommendation.
+
+The worker rejects an outbound operation older than `Telephony__MaximumQueueAgeSeconds` without contacting the provider. The operation and call fail with `telephony_runtime_unavailable`, preventing a stale queued request from causing a delayed surprise call after the worker returns.
+
 There is deliberately no `Telephony__Twilio__FromNumber` setting. PurpleGlass takes the outbound caller ID from its persisted telephony-number assignment for the administrator's tenant and location. Before calling, use the authenticated `PUT /bff/v1/telephony/numbers` administration endpoint to assign the Twilio number in E.164 format with `provider` set to `Twilio`, the selected `locationId`, `outboundEnabled: true`, and `active: true`. Set `inboundEnabled: true` only if inbound routing will also be tested. The request is CSRF-protected and requires the `ManageLocation` permission; do not create the row manually in PostgreSQL.
 
 Twilio trial calls may target only a recipient verified in the Twilio Console. Enter that verified destination in the PurpleGlass call control in E.164 form, for example `+15551234567`; never hard-code it. The configured source number must be a Twilio number the trial account is allowed to use.

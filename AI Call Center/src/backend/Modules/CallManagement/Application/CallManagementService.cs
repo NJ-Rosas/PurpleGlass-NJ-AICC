@@ -231,7 +231,7 @@ public sealed class CallManagementService(ICallStore store, TimeProvider timePro
         await SaveAsync(cancellationToken);
         return new TelephonyDispatch(operation.Id, operation.Type.ToString(), operation.TenantId.Value,
             operation.LocationId.Value, operation.CallId.Value, call.Provider, call.ProviderCallId,
-            call.FromNumber, call.ToNumber);
+            call.FromNumber, call.ToNumber, operation.CreatedAtUtc);
     }
 
     public async Task CompleteTelephonyDispatchAsync(Guid operationId, string? providerCallId, string? safeErrorCode, CancellationToken cancellationToken)

@@ -55,6 +55,10 @@ IDataProtectionBuilder dataProtection = builder.Services.AddDataProtection().Set
 if (!string.IsNullOrWhiteSpace(security.DataProtectionKeysPath))
     dataProtection.PersistKeysToFileSystem(new DirectoryInfo(security.DataProtectionKeysPath));
 builder.Services.AddHttpContextAccessor();
+builder.Services.AddHttpClient(nameof(WorkerRuntimeGateway), client =>
+    client.Timeout = TimeSpan.FromSeconds(15));
+builder.Services.AddSingleton<WorkerRuntimeGateway>();
+builder.Services.AddHostedService(service => service.GetRequiredService<WorkerRuntimeGateway>());
 builder.Services.AddScoped<TrustedRequestContextAccessor>();
 builder.Services.AddScoped<IRequestContextAccessor>(provider => provider.GetRequiredService<TrustedRequestContextAccessor>());
 if (builder.Environment.IsDevelopment() && security.AllowDevelopmentAuthentication)
@@ -279,7 +283,8 @@ app.Map("/telephony/twilio/media", async (
 }).RequireRateLimiting("telephony-media");
 
 app.MapPost("/telephony/twilio/inbound", async (HttpContext httpContext,
-    ITelephonyWebhookVerifier verifier, CallManagementService calls, CancellationToken cancellationToken) =>
+    ITelephonyWebhookVerifier verifier, CallManagementService calls, WorkerRuntimeGateway workerRuntime,
+    CancellationToken cancellationToken) =>
 {
     if (!httpContext.Request.HasFormContentType)
         return Results.Problem(statusCode: 400, title: "Invalid provider request", extensions: new Dictionary<string, object?> { ["code"] = "provider_content_type_invalid" });
@@ -296,6 +301,7 @@ app.MapPost("/telephony/twilio/inbound", async (HttpContext httpContext,
         return Results.Problem(statusCode: 403, title: "Provider request rejected", extensions: new Dictionary<string, object?> { ["code"] = "provider_account_mismatch" });
 
     using Activity? activity = PurpleGlassTelemetry.Integrations.StartActivity("telephony.inbound.receive", ActivityKind.Consumer);
+    workerRuntime.RequestWake();
     Guid correlationId = Guid.NewGuid();
     activity?.SetTag("purpleglass.correlation_id", correlationId);
     _ = await calls.RegisterInboundTransportAsync("Twilio", callSid,
@@ -433,6 +439,7 @@ protectedBff.MapGet("/calls", async (TrustedRequestContextAccessor accessor, Cal
 protectedBff.MapPost("/calls/outbound", async (OutboundTransportRequest request, HttpContext httpContext,
     IAntiforgery antiforgery, TrustedRequestContextAccessor accessor, CallManagementService calls,
     SecurityAuditService audit, ITelephonyProvider provider, RealtimeVoiceRuntimeStatus voiceRuntime,
+    WorkerRuntimeGateway workerRuntime,
     CancellationToken cancellationToken) =>
 {
     await antiforgery.ValidateRequestAsync(httpContext);
@@ -444,6 +451,7 @@ protectedBff.MapPost("/calls/outbound", async (OutboundTransportRequest request,
     RequestContext context = accessor.Current;
     if (context.AuthorizedLocationIds?.Contains(request.LocationId) != true)
         throw new SecurityBoundaryException("location_access_denied");
+    await workerRuntime.EnsureReadyAsync(cancellationToken);
     CallSummary call = await calls.RequestTransportOutboundAsync(new RequestTransportOutboundCall(
         context.TenantId, request.LocationId, request.IdempotencyKey,
         request.DestinationNumber, context.CorrelationId), cancellationToken);
