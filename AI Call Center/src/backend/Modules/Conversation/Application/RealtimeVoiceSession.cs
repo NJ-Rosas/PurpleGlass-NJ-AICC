@@ -544,7 +544,8 @@ public sealed class RealtimeVoiceSession(
             AiResponseResult result = await InvokeAsync(
                 "generate", options.LanguageModelTimeout,
                 token => languageModel.GenerateAsync(new AiResponseRequest(
-                    context, options.Conversation, history, callerText, [],
+                    context, options.Conversation, DentalAgentBehavior.Build(options.Conversation),
+                    history, callerText, [],
                     new SafetyEscalationPolicy(options.Conversation.SafetyPolicyVersion,
                         options.Conversation.EscalationKeywords, options.Conversation.UrgentKeywords)), token),
                 value => value.Failure, cancellationToken);

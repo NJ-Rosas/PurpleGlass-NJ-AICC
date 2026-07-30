@@ -4,9 +4,15 @@ public sealed record SanitizedConversationTurn(string Speaker, string Text);
 
 public sealed record AiToolDefinition(string Name, string Description);
 
+public sealed record ConversationAgentBehavior(
+    string Instructions,
+    IReadOnlySet<string> ConversationalCapabilities,
+    IReadOnlySet<string> UnsupportedActions);
+
 public sealed record AiResponseRequest(
     RuntimeInvocationContext Context,
     ConversationRuntimeConfiguration Configuration,
+    ConversationAgentBehavior Behavior,
     IReadOnlyList<SanitizedConversationTurn> ExistingTurns,
     string CurrentCallerTurn,
     IReadOnlyList<AiToolDefinition> AvailableTools,

@@ -33,7 +33,7 @@ public sealed class SimulatedCallFlowTests(SimulatedCallFlowFixture fixture)
         Assert.Contains(result.Transcript, turn => turn.Speaker == "Caller");
         Assert.Contains(result.Transcript, turn => turn.Speaker == "Assistant");
         Assert.NotNull(result.Summary);
-        Assert.Contains("general-test", result.Summary.CallerIntent, StringComparison.Ordinal);
+        Assert.Contains("office-hours", result.Summary.CallerIntent, StringComparison.Ordinal);
         Assert.Single((await harness.Calls.Calls.AsNoTracking().ToListAsync()), call => call.Id.Value == result.CallId);
         await using var eventing = fixture.CreateEventing();
         Assert.True(await eventing.OutboxMessages.CountAsync(message => message.CorrelationId == request.CorrelationId) >= 10);
@@ -73,7 +73,7 @@ public sealed class SimulatedCallFlowTests(SimulatedCallFlowFixture fixture)
         Assert.Equal("Completed", result.ConversationState);
         Assert.False(result.Summary?.Escalated);
         Assert.Contains(result.Transcript, turn => turn.Speaker == "Assistant"
-            && turn.Text.Contains("not available", StringComparison.OrdinalIgnoreCase));
+            && turn.Text.Contains("can't transfer", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]

@@ -316,7 +316,8 @@ public sealed class RealtimeVoiceTests
         SpeechSynthesisResult synthesis = await speech.SynthesizeAsync(
             new SpeechSynthesisRequest(Context, "hello", "en-US", new VoiceConfiguration("calm-a")), default);
         AiResponseResult generation = await languageModel.GenerateAsync(new AiResponseRequest(
-            Context, Configuration(), [], "hello", [], new SafetyEscalationPolicy("test", [], [])), default);
+            Context, Configuration(), DentalAgentBehavior.Build(Configuration()), [], "hello", [],
+            new SafetyEscalationPolicy("test", [], [])), default);
 
         Assert.Equal("speech_recognition_disabled", recognition.Failure?.Code);
         Assert.False(recognition.Failure?.Retryable);
@@ -330,11 +331,11 @@ public sealed class RealtimeVoiceTests
     }
 
     [Theory]
-    [InlineData("I need an appointment", "Thanks for the test message. This development assistant can continue a general voice conversation.")]
-    [InlineData("My name is Test Caller", "Thanks for the test message. This development assistant can continue a general voice conversation.")]
-    [InlineData("What are your hours?", "Thanks for the test message. This development assistant can continue a general voice conversation.")]
-    [InlineData("I need a human", "Human transfer is not available in this development assistant.")]
-    [InlineData("My tooth hurts", "I can't provide medical advice. If this may be an emergency, contact local emergency services.")]
+    [InlineData("I need an appointment", "Sure, I can help gather the details for an appointment request. Is this for a routine visit or is something bothering you?")]
+    [InlineData("My name is Test Caller", "Of course. What would you like help with today?")]
+    [InlineData("What are your hours?", "I don't have the office hours available.")]
+    [InlineData("I need a human", "I understand you'd like to speak with someone. I can't transfer this call right now, but I can gather what you need help with.")]
+    [InlineData("My tooth hurts", "I can't diagnose a dental condition, but I can help gather information about the concern. How long has it been bothering you?")]
     public async Task FakeLanguageModelMakesNoUnsupportedWorkflowOrStaffClaims(
         string callerText,
         string expectedResponse)
@@ -344,6 +345,7 @@ public sealed class RealtimeVoiceTests
         AiResponseResult result = await languageModel.GenerateAsync(new AiResponseRequest(
             Context,
             configuration,
+            DentalAgentBehavior.Build(configuration),
             [],
             callerText,
             [],
@@ -353,10 +355,10 @@ public sealed class RealtimeVoiceTests
         Assert.DoesNotContain("staff", result.AssistantText, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("recorded", result.AssistantText, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("office team", result.AssistantText, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("appointment", result.AssistantText, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("booked", result.AssistantText, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("insurance", result.AssistantText, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("patient", result.AssistantText, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("has been cancelled", result.AssistantText, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("has been rescheduled", result.AssistantText, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("transfer is complete", result.AssistantText, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

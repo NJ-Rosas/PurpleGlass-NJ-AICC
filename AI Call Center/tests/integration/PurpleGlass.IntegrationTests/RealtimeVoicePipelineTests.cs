@@ -64,7 +64,7 @@ public sealed class RealtimeVoicePipelineTests(DurablePathFixture fixture)
     }
 
     [Fact]
-    public async Task TwoTurnsPreservePriorCallerAndAssistantHistory()
+    public async Task DentalAppointmentTurnsPreservePriorCallerAndAssistantHistory()
     {
         var languageModel = new ControlledAiRuntime((_, invocation) =>
             invocation == 1 ? "First answer." : "Second answer.");
@@ -72,24 +72,28 @@ public sealed class RealtimeVoicePipelineTests(DurablePathFixture fixture)
         Task run = harness.Start();
         _ = await harness.States.WaitForAsync(change => change.State == VoiceSessionState.Listening);
 
-        await harness.Transport.QueueUtteranceAsync("First question");
-        await harness.Transport.QueueUtteranceAsync("Second question");
+        await harness.Transport.QueueUtteranceAsync("I need to make an appointment");
+        await harness.Transport.QueueUtteranceAsync("My back tooth hurts when I drink cold water");
         _ = await harness.States.WaitForOccurrencesAsync(VoiceSessionState.Listening, 3);
         harness.Transport.CompleteInput();
         await run.WaitAsync(TestTimeout);
 
         Assert.Equal(2, languageModel.Requests.Count);
         AiResponseRequest second = languageModel.Requests[1];
-        Assert.Equal("Second question", second.CurrentCallerTurn);
+        Assert.Equal("My back tooth hurts when I drink cold water", second.CurrentCallerTurn);
         Assert.Contains(second.ExistingTurns,
-            turn => turn.Speaker == "Caller" && turn.Text == "First question");
+            turn => turn.Speaker == "Caller" && turn.Text == "I need to make an appointment");
         Assert.Contains(second.ExistingTurns,
             turn => turn.Speaker == "Assistant" && turn.Text == "First answer.");
+        Assert.Contains("virtual receptionist", second.Behavior.Instructions, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("appointment_booking", second.Behavior.UnsupportedActions);
+        Assert.Empty(second.AvailableTools);
         ConversationDetails details = await ReadDetailsAsync(harness.TenantId, harness.CallId);
         Assert.Equal(2, details.Transcript.Count(turn => turn.Speaker == "Caller"));
         Assert.Equal(3, details.Transcript.Count(turn => turn.Speaker == "Assistant"));
         Assert.Equal(
-            [Greeting, "First question", "First answer.", "Second question", "Second answer."],
+            [Greeting, "I need to make an appointment", "First answer.",
+                "My back tooth hurts when I drink cold water", "Second answer."],
             details.Transcript.OrderBy(turn => turn.SequenceNumber).Select(turn => turn.Text).ToArray());
         await AssertCompletedAndDisposedAsync(harness, "media_disconnected");
     }
@@ -125,6 +129,7 @@ public sealed class RealtimeVoicePipelineTests(DurablePathFixture fixture)
         Assert.DoesNotContain(request.ExistingTurns,
             turn => turn.Text.Contains(tenantASecret, StringComparison.Ordinal));
         Assert.DoesNotContain(tenantASecret, request.CurrentCallerTurn, StringComparison.Ordinal);
+        Assert.DoesNotContain(tenantASecret, request.Behavior.Instructions, StringComparison.Ordinal);
         await AssertCompletedAndDisposedAsync(tenantB, "media_disconnected");
     }
 

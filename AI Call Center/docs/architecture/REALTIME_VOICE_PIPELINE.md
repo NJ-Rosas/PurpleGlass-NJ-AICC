@@ -1,6 +1,6 @@
 # Realtime Voice Conversation Pipeline
 
-PurpleGlass Task 9 adds a call-scoped, repeated-turn voice pipeline while preserving CallManagement, Conversation persistence, tenant isolation, and the existing realtime dashboard path.
+PurpleGlass provides a call-scoped, repeated-turn voice pipeline while preserving CallManagement, Conversation persistence, tenant isolation, and the existing realtime dashboard path. Task 16 adds the provider-neutral dental-receptionist behavior described below; it does not activate or deploy the OpenAI path.
 
 ```text
 Caller
@@ -85,11 +85,27 @@ An inactivity limit, maximum session duration, maximum turns, maximum utterance 
 
 ## Conversation and greeting
 
-On connection, the runtime creates or reuses the one Conversation aggregate for the authorized call and activates it. A predefined generic greeting is persisted as an Assistant turn and synthesized:
+On connection, the runtime creates or reuses the one Conversation aggregate for the authorized call and activates it. A configured, voice-friendly greeting is persisted as an Assistant turn and synthesized. The committed default is neutral because no trusted dental-location display name is configured:
 
-> Hello, thank you for calling PurpleGlass. How can I help you?
+> Thank you for calling our dental office. How can I help you today?
 
-The base prompt identifies a PurpleGlass development assistant and requires brief responses. It explicitly prevents claims about unavailable actions or systems. Task 9 does not include office knowledge, patient access, appointment actions, insurance, or any other dental tool.
+`DentalAgentBehavior` in the Conversation application layer constructs the trusted behavior independently of the selected LLM provider. It identifies the assistant as the virtual receptionist for the current PurpleGlass dental location and identifies the interaction as a phone call. Responses should ordinarily be one to three short spoken sentences, acknowledge the caller, use recent history, and ask one primary question at a time. Caller-facing output must be plain speech without Markdown, headings, tables, lists, emoji, or generic text-message acknowledgements. The opening greeting is not repeated on later turns.
+
+### Trusted context and caller input
+
+The behavior builder receives only the bounded `ConversationRuntimeConfiguration`: configured language, optional office display name, optional office hours/address, approved safety keywords, and an optional trusted configuration instruction. Values equal to `not configured` are explicitly treated as unavailable and are not presented as facts. The committed realtime configuration has no office name, hours, or address; the assistant must say it does not have an unavailable fact rather than invent one.
+
+Each `AiResponseRequest` keeps this trusted `ConversationAgentBehavior` separate from `CurrentCallerTurn` and the bounded `ExistingTurns`. Caller speech—including a request to ignore instructions—is always mapped as a caller/user message, never appended to trusted instructions. Durable transcript queries remain tenant-scoped, and the behavior request contains no database entity dump, internal tenant/location identifiers, or other tenant's context.
+
+The OpenAI adapter maps the already-built application instructions and provider-neutral Caller/Assistant messages into the Responses API. It does not own dental policy. The deterministic implementation follows the same behavioral boundary with stable, credential-free responses for appointment intake, dental concerns, office facts, insurance, billing, privacy, and human-assistance requests.
+
+### Conversation authority and future tools
+
+The receptionist may understand caller intent, maintain a multi-turn conversation, generate short spoken responses, and gather simple intake details. It recognizes new and existing appointment questions, rescheduling, cancellation, dental concerns, office information, insurance, billing, general questions, requests for a person, and urgent concerns.
+
+Conversation intelligence does not grant business authority. No business-action tools are enabled. The receptionist cannot search live availability; book, cancel, or reschedule appointments; search or modify patient records; verify insurance coverage or eligibility; read balances; process payments; transfer a call; or execute Open Dental operations. It must not imply that any of those actions occurred. It also must not fabricate practice facts, patient data, coverage, prices, balances, staff availability, transfer status, diagnoses, prescriptions, or clinical urgency.
+
+Configured urgent keywords remain the only approved escalation policy. When none are configured, the behavior explicitly forbids inventing emergency routing or claiming to assess urgency. A future tool task may grant individual capabilities through a reviewed application boundary; it must not bury action authority inside a provider prompt or adapter.
 
 For each finalized caller utterance:
 
@@ -349,6 +365,6 @@ Current limitations are intentional:
 - OpenAI TTS is divided into bounded chunks after the provider response; upstream provider streaming can be added later.
 - Language is configured per session; automatic language detection/switching is not implemented.
 - Multi-provider failover, transfer, recording, and human-agent features are not implemented.
-- Task 10 tool execution is not implemented: there is no patient lookup, appointment action, insurance workflow, Open Dental access, RAG, or other dental capability.
+- Business-action tool execution is not implemented: there is no patient lookup, appointment action, insurance workflow, Open Dental access, RAG, or other authoritative dental capability.
 
 See [ADR 0010](../adr/0010-realtime-voice-conversation-pipeline.md) for the decision and tradeoffs.

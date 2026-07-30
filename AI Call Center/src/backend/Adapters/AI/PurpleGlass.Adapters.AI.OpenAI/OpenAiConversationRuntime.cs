@@ -4,11 +4,6 @@ namespace PurpleGlass.Adapters.AI.OpenAI;
 
 public sealed class OpenAiConversationRuntime : IAiConversationRuntime
 {
-    private const string BaselineInstructions =
-        "You are speaking with a caller by phone. Return plain conversational text without Markdown. " +
-        "Keep responses reasonably concise and usually ask one useful question at a time. " +
-        "Do not invent office information or patient data. Do not claim an appointment was created " +
-        "or that any external action was performed. Do not diagnose dental conditions or pretend tools exist.";
     private readonly IOpenAiResponsesGateway gateway;
     private readonly OpenAiConversationOptions options;
 
@@ -36,7 +31,7 @@ public sealed class OpenAiConversationRuntime : IAiConversationRuntime
         IReadOnlyList<OpenAiConversationMessage> messages = BuildMessages(request, callerText);
         var providerRequest = new OpenAiResponsesRequest(
             options.Model,
-            BuildInstructions(request.Configuration),
+            request.Behavior.Instructions,
             messages,
             request.Configuration.MaximumOutputTokens);
 
@@ -106,21 +101,6 @@ public sealed class OpenAiConversationRuntime : IAiConversationRuntime
         messages.Add(new OpenAiConversationMessage("user", callerText));
         return messages.TakeLast(request.Configuration.MaximumHistoryTurns).ToArray();
     }
-
-    internal static string BuildInstructions(ConversationRuntimeConfiguration configuration)
-    {
-        var parts = new List<string> { BaselineInstructions, configuration.SystemPrompt.Trim() };
-        if (!IsUnavailable(configuration.OfficeName))
-            parts.Add($"You represent the configured office or location named {configuration.OfficeName.Trim()}.");
-        if (!IsUnavailable(configuration.OfficeLocation))
-            parts.Add($"The trusted configured location is {configuration.OfficeLocation.Trim()}.");
-        parts.Add($"Use the configured call language {configuration.Language.Trim()}.");
-        return string.Join(' ', parts);
-    }
-
-    private static bool IsUnavailable(string value) =>
-        string.IsNullOrWhiteSpace(value)
-        || value.Trim().Equals("not configured", StringComparison.OrdinalIgnoreCase);
 
     private static RuntimeFailure MapProviderFailure(int statusCode) => statusCode switch
     {

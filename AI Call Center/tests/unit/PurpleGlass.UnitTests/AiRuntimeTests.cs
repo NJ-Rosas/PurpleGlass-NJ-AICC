@@ -34,17 +34,18 @@ public sealed class AiRuntimeTests
     }
 
     [Theory]
-    [InlineData("What are your hours?")]
-    [InlineData("Where is your location?")]
-    [InlineData("My name is Alex Example")]
-    public async Task AiKeepsLegacyOfficeInputsInsideGenericTaskNineScope(string callerText)
+    [InlineData("What are your hours?", "office-hours", "Monday through Friday, 8 AM to 5 PM")]
+    [InlineData("Where is your location?", "office-location", "100 Prototype Avenue")]
+    [InlineData("My name is Alex Example", "general-intake", "What would you like help with today?")]
+    public async Task AiHandlesTrustedOfficeFactsAndGeneralIntake(
+        string callerText,
+        string expectedIntent,
+        string expectedResponseContent)
     {
         AiResponseResult result = await CreateAi().GenerateAsync(Request(callerText), default);
 
-        Assert.Equal("general-test", result.Intent);
-        Assert.Equal(
-            "Thanks for the test message. This development assistant can continue a general voice conversation.",
-            result.AssistantText);
+        Assert.Equal(expectedIntent, result.Intent);
+        Assert.Contains(expectedResponseContent, result.AssistantText, StringComparison.OrdinalIgnoreCase);
         Assert.Null(result.Failure);
     }
 
@@ -57,7 +58,8 @@ public sealed class AiRuntimeTests
         Assert.False(result.EscalationRequested);
         Assert.Null(result.EscalationReason);
         Assert.False(result.ShouldEndConversation);
-        Assert.Equal("Human transfer is not available in this development assistant.", result.AssistantText);
+        Assert.Contains("can't transfer", result.AssistantText, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("transferred", result.AssistantText, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -78,8 +80,8 @@ public sealed class AiRuntimeTests
     {
         AiResponseResult result = await CreateAi().GenerateAsync(Request("My tooth hurts, diagnose it"), default);
 
-        Assert.Equal("medical-question", result.Intent);
-        Assert.Contains("can't provide medical advice", result.AssistantText, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("dental-concern-intake", result.Intent);
+        Assert.Contains("can't diagnose", result.AssistantText, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("staff", result.AssistantText, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -104,6 +106,7 @@ public sealed class AiRuntimeTests
     private static AiResponseRequest Request(string callerText) => new(
         Context,
         Configuration(),
+        DentalAgentBehavior.Build(Configuration()),
         [],
         callerText,
         [],

@@ -133,6 +133,7 @@ public sealed partial class CallOrchestrationService(
                     token => aiRuntime.GenerateAsync(new AiResponseRequest(
                         runtimeContext,
                         options.Conversation,
+                        DentalAgentBehavior.Build(options.Conversation),
                         currentTranscript.Select(turn => new SanitizedConversationTurn(turn.Speaker, turn.Text)).ToArray(),
                         recognition.RecognizedText,
                         [],
