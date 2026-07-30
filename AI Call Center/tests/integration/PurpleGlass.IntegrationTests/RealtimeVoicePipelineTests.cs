@@ -40,6 +40,23 @@ public sealed class RealtimeVoicePipelineTests(DurablePathFixture fixture)
         Assert.Equal("Hello", generation.CurrentCallerTurn);
         Assert.Equal("Hello from the assistant.", harness.Synthesizer.Requests[1].Text);
         Assert.Contains("Hello from the assistant.", DecodeOutput(harness.Transport));
+        string[] latencyStages = harness.Diagnostics.Latencies.Select(item => item.Stage).ToArray();
+        Assert.Contains("stt_request_started", latencyStages);
+        Assert.Contains("stt_completed", latencyStages);
+        Assert.Contains("llm_request_started", latencyStages);
+        Assert.Contains("llm_completed", latencyStages);
+        Assert.Contains("tts_first_audio", latencyStages);
+        Assert.Contains("first_twilio_media_sent", latencyStages);
+        Assert.Contains("tts_completed", latencyStages);
+        Assert.All(harness.Diagnostics.Latencies, diagnostic =>
+        {
+            Assert.True(double.IsFinite(diagnostic.DurationMs) && diagnostic.DurationMs >= 0);
+            Assert.True(double.IsFinite(diagnostic.ElapsedFromEndpointMs)
+                && diagnostic.ElapsedFromEndpointMs >= 0);
+            Assert.InRange(diagnostic.Stage.Length, 1, 64);
+            Assert.InRange(diagnostic.Adapter.Length, 1, 64);
+            Assert.InRange(diagnostic.Result.Length, 1, 64);
+        });
 
         ConversationDetails details = await ReadDetailsAsync(harness.TenantId, harness.CallId);
         Assert.Equal("Completed", details.State);
@@ -60,6 +77,42 @@ public sealed class RealtimeVoicePipelineTests(DurablePathFixture fixture)
         Assert.True(await eventing.OutboxMessages.AnyAsync(message =>
             message.CorrelationId == harness.CorrelationId
             && message.MessageType == nameof(AIResponseGenerated)));
+        await AssertCompletedAndDisposedAsync(harness, "media_disconnected");
+    }
+
+    [Fact]
+    public async Task GreetingWaitsForExplicitMediaReadinessBeforeSendingAudio()
+    {
+        await using SessionHarness harness = await CreateHarnessAsync();
+        harness.Transport.HoldMediaReady();
+
+        Task run = harness.Start();
+        await harness.Synthesizer.WaitForInvocationsAsync(1);
+
+        Assert.Equal(1, harness.Transport.MediaReadyWaitCount);
+        Assert.Empty(harness.Transport.OutboundChunks);
+
+        harness.Transport.ReleaseMediaReady();
+        _ = await harness.States.WaitForAsync(change => change.State == VoiceSessionState.Listening);
+        Assert.NotEmpty(harness.Transport.OutboundChunks);
+        harness.Transport.CompleteInput();
+        await run.WaitAsync(TestTimeout);
+        await AssertCompletedAndDisposedAsync(harness, "media_disconnected");
+    }
+
+    [Fact]
+    public async Task DisconnectBeforeGreetingMediaReadinessCancelsWithoutSendingOrDuplicatingAudio()
+    {
+        await using SessionHarness harness = await CreateHarnessAsync();
+        harness.Transport.HoldMediaReady();
+        Task run = harness.Start();
+        await harness.Synthesizer.WaitForInvocationsAsync(1);
+
+        harness.Transport.CompleteInput();
+        await run.WaitAsync(TestTimeout);
+
+        Assert.Single(harness.Synthesizer.Requests);
+        Assert.Empty(harness.Transport.OutboundChunks);
         await AssertCompletedAndDisposedAsync(harness, "media_disconnected");
     }
 
@@ -687,6 +740,7 @@ public sealed class RealtimeVoicePipelineTests(DurablePathFixture fixture)
             languageModel ??= new ControlledAiRuntime();
             synthesizer ??= new ControlledSpeechSynthesizer();
             var persistence = new FixtureRealtimeConversationPersistence(fixture, commandInterceptor);
+            var diagnostics = new RecordingVoiceSessionDiagnostics();
             var session = new RealtimeVoiceSession(
                 persistence,
                 recognizer,
@@ -695,7 +749,7 @@ public sealed class RealtimeVoicePipelineTests(DurablePathFixture fixture)
                 Options(),
                 states,
                 TimeProvider.System,
-                new RecordingVoiceSessionDiagnostics());
+                diagnostics);
             var identity = new VoiceSessionIdentity(
                 call.TenantId,
                 call.LocationId,
@@ -716,7 +770,8 @@ public sealed class RealtimeVoicePipelineTests(DurablePathFixture fixture)
                 states,
                 recognizer,
                 languageModel,
-                synthesizer);
+                synthesizer,
+                diagnostics);
         }
         catch
         {
@@ -851,7 +906,8 @@ public sealed class RealtimeVoicePipelineTests(DurablePathFixture fixture)
             RecordingVoiceSessionStateSink states,
             ControlledSpeechRecognizer recognizer,
             ControlledAiRuntime languageModel,
-            ControlledSpeechSynthesizer synthesizer)
+            ControlledSpeechSynthesizer synthesizer,
+            RecordingVoiceSessionDiagnostics diagnostics)
         {
             this.calls = calls;
             this.conversations = conversations;
@@ -864,6 +920,7 @@ public sealed class RealtimeVoicePipelineTests(DurablePathFixture fixture)
             Recognizer = recognizer;
             LanguageModel = languageModel;
             Synthesizer = synthesizer;
+            Diagnostics = diagnostics;
         }
 
         public CallManagementService Calls { get; }
@@ -875,6 +932,7 @@ public sealed class RealtimeVoicePipelineTests(DurablePathFixture fixture)
         public ControlledSpeechRecognizer Recognizer { get; }
         public ControlledAiRuntime LanguageModel { get; }
         public ControlledSpeechSynthesizer Synthesizer { get; }
+        public RecordingVoiceSessionDiagnostics Diagnostics { get; }
         public Guid TenantId => Identity.TenantId;
         public Guid LocationId => Identity.LocationId;
         public Guid CallId => Identity.CallId;
@@ -1075,7 +1133,20 @@ public sealed class RealtimeVoicePipelineTests(DurablePathFixture fixture)
 
     private sealed class RecordingVoiceSessionDiagnostics : IVoiceSessionDiagnostics
     {
+        private readonly object synchronization = new();
+        private readonly List<VoiceLatencyDiagnostic> latencies = [];
+
+        public IReadOnlyList<VoiceLatencyDiagnostic> Latencies
+        {
+            get { lock (synchronization) return latencies.ToArray(); }
+        }
+
         public void RecordException(VoiceSessionExceptionDiagnostic diagnostic) { }
+
+        public void RecordLatency(VoiceLatencyDiagnostic diagnostic)
+        {
+            lock (synchronization) latencies.Add(diagnostic);
+        }
     }
 
     private sealed class ControlledSpeechRecognizer : ISpeechRecognizer

@@ -1,3 +1,5 @@
+using System.Runtime.CompilerServices;
+
 namespace PurpleGlass.Modules.Conversation.Application;
 
 public sealed record RuntimeInvocationContext(
@@ -84,6 +86,15 @@ public sealed record SpeechSynthesisResult(
     RuntimeFailure? Failure = null,
     IReadOnlyList<SynthesizedAudioChunk>? AudioChunks = null);
 
+public sealed record SpeechSynthesisStreamUpdate(
+    SynthesizedAudioChunk? AudioChunk = null,
+    SpeechSynthesisResult? Completion = null)
+{
+    public static SpeechSynthesisStreamUpdate Audio(SynthesizedAudioChunk chunk) => new(chunk);
+
+    public static SpeechSynthesisStreamUpdate Completed(SpeechSynthesisResult result) => new(Completion: result);
+}
+
 public interface ISpeechSynthesizer
 {
     string AdapterKey { get; }
@@ -91,4 +102,20 @@ public interface ISpeechSynthesizer
     Task<SpeechSynthesisResult> SynthesizeAsync(
         SpeechSynthesisRequest request,
         CancellationToken cancellationToken);
+
+    async IAsyncEnumerable<SpeechSynthesisStreamUpdate> SynthesizeStreamingAsync(
+        SpeechSynthesisRequest request,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        SpeechSynthesisResult result = await SynthesizeAsync(request, cancellationToken);
+        if (result.Failure is null)
+        {
+            foreach (SynthesizedAudioChunk chunk in result.AudioChunks ?? [])
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                yield return SpeechSynthesisStreamUpdate.Audio(chunk);
+            }
+        }
+        yield return SpeechSynthesisStreamUpdate.Completed(result);
+    }
 }

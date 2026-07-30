@@ -1,5 +1,7 @@
 using System.Diagnostics;
 using OpenAI.Responses;
+using OpenAI.Audio;
+using OpenAI;
 using PurpleGlass.Adapters.AI.Mock;
 using PurpleGlass.Adapters.AI.OpenAI;
 using PurpleGlass.Adapters.Speech.Mock;
@@ -63,7 +65,8 @@ public static class RealtimeVoiceServiceCollectionExtensions
 
         if (languageModel == "OpenAI") AddOpenAiConversation(
             services, configuration, options.LanguageModelTimeout);
-        if (speechToText == "OpenAI" || textToSpeech == "OpenAI") AddOpenAiSpeech(services, configuration);
+        if (speechToText == "OpenAI" || textToSpeech == "OpenAI")
+            AddOpenAiSpeech(services, configuration, options.SynthesisTimeout);
 
         services.AddTransient<IAiConversationRuntime>(provider => languageModel switch
         {
@@ -115,15 +118,31 @@ public static class RealtimeVoiceServiceCollectionExtensions
         services.AddSingleton<OpenAiConversationRuntime>();
     }
 
-    private static void AddOpenAiSpeech(IServiceCollection services, IConfiguration configuration)
+    private static void AddOpenAiSpeech(
+        IServiceCollection services,
+        IConfiguration configuration,
+        TimeSpan networkTimeout)
     {
-        services.AddSingleton(new OpenAiSpeechOptions
+        OpenAiSpeechOptions options = new OpenAiSpeechOptions
         {
             ApiKey = configuration["OpenAI:ApiKey"] ?? string.Empty,
             BaseUri = BaseUri(configuration),
             TranscriptionModel = configuration["OpenAI:TranscriptionModel"] ?? string.Empty,
             SynthesisModel = configuration["OpenAI:SpeechModel"] ?? string.Empty,
-        }.Validate());
+        }.Validate();
+        services.AddSingleton(options);
+#pragma warning disable OPENAI001
+        services.AddSingleton(new AudioClient(
+            options.SynthesisModel,
+            new ApiKeyCredential(options.ApiKey),
+            new OpenAIClientOptions
+            {
+                Endpoint = options.BaseUri,
+                NetworkTimeout = networkTimeout,
+                RetryPolicy = new ClientRetryPolicy(0),
+            }));
+#pragma warning restore OPENAI001
+        services.AddSingleton<IOpenAiSpeechStreamingGateway, OpenAiSpeechStreamingGateway>();
         services.AddHttpClient<OpenAiSpeechRecognizer>(client => client.Timeout = Timeout.InfiniteTimeSpan);
         services.AddHttpClient<OpenAiSpeechSynthesizer>(client => client.Timeout = Timeout.InfiniteTimeSpan);
     }

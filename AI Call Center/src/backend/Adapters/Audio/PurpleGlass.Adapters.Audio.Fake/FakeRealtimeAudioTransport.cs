@@ -14,6 +14,8 @@ public sealed class FakeRealtimeAudioTransport : IRealtimeAudioTransport
     private long nextSequence;
     private long responseSequence;
     private readonly Dictionary<string, TaskCompletionSource<RealtimePlaybackCompletion>> pendingPlayback = [];
+    private TaskCompletionSource mediaReady = CompletedSignal();
+    private int mediaReadyWaitCount;
     private bool disposed;
 
     public FakeRealtimeAudioTransport(
@@ -43,6 +45,7 @@ public sealed class FakeRealtimeAudioTransport : IRealtimeAudioTransport
     public int ClearPlaybackCount { get; private set; }
     public string? CompletionReason { get; private set; }
     public bool AutoAcknowledgePlayback { get; set; } = true;
+    public int MediaReadyWaitCount => Volatile.Read(ref mediaReadyWaitCount);
 
     public IReadOnlyList<SynthesizedAudioChunk> OutboundChunks
     {
@@ -74,6 +77,25 @@ public sealed class FakeRealtimeAudioTransport : IRealtimeAudioTransport
     {
         await foreach (RealtimeAudioFrame frame in inbound.Reader.ReadAllAsync(cancellationToken))
             yield return frame;
+    }
+
+    public async ValueTask WaitForMediaReadyAsync(CancellationToken cancellationToken)
+    {
+        Interlocked.Increment(ref mediaReadyWaitCount);
+        Task ready;
+        lock (synchronization) ready = mediaReady.Task;
+        await ready.WaitAsync(cancellationToken);
+    }
+
+    public void HoldMediaReady()
+    {
+        lock (synchronization)
+            mediaReady = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
+
+    public void ReleaseMediaReady()
+    {
+        lock (synchronization) mediaReady.TrySetResult();
     }
 
     public ValueTask<RealtimeAudioSendResult> SendAsync(SynthesizedAudioChunk chunk, CancellationToken cancellationToken)
@@ -139,5 +161,12 @@ public sealed class FakeRealtimeAudioTransport : IRealtimeAudioTransport
         disposed = true;
         inbound.Writer.TryComplete();
         return ValueTask.CompletedTask;
+    }
+
+    private static TaskCompletionSource CompletedSignal()
+    {
+        var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        signal.SetResult();
+        return signal;
     }
 }

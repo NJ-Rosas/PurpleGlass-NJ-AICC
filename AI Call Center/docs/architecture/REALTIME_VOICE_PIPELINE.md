@@ -63,13 +63,25 @@ Twilio inbound: 8 kHz mono mu-law/base64
 PurpleGlass:     8 kHz mono PCM16
     -> STT adapter
 
-TTS adapter:     PCM16 chunks (OpenAI currently returns 24 kHz mono)
-    -> resample to 8 kHz when required
-    -> mu-law encode/base64
+TTS adapter:     streamed PCM16 deltas (OpenAI returns 24 kHz mono)
+    -> stateful band-limited resample to 8 kHz
+    -> mu-law encode/base64 in bounded 100 ms packets
 Twilio outbound media
 ```
 
 The Conversation module sees explicit `AudioFormat`, `RealtimeAudioFrame`, finalized utterance, and synthesized chunk types; it does not see Twilio JSON events, stream SIDs, base64 payloads, or mu-law assumptions. JSON messages, encoded payloads, decoded media, PCM chunks, and outbound frames all have configured size bounds.
+
+### Task 16.1 streaming playback
+
+Before Task 16.1, the OpenAI speech adapter materialized the complete PCM response and the Twilio transport accumulated every PCM chunk before resampling. Playback could therefore begin only after both full-response waits. The Task 16 production evidence measured LLM completion at approximately 0.60–3.51 seconds (median approximately 1.04 seconds), TTS completion at approximately 0.82–4.79 seconds (median approximately 1.53 seconds), and model completion to first audible media at approximately 1.0–2.4 seconds with one approximately 5.3-second outlier. Caller-perceived pauses could reach roughly 3–6 seconds or longer.
+
+The OpenAI adapter now consumes the installed official SDK's streaming speech API and emits each valid raw-PCM audio delta through the provider-neutral `ISpeechSynthesizer` stream. A bounded four-update channel decouples provider receipt from paced carrier delivery without allowing unbounded send-ahead. The finalized assistant text remains one durable Assistant turn; audio deltas are never persisted as conversation content.
+
+Each response owns one `StreamingPcm16Resampler`. It carries a split PCM16 byte across provider deltas, retains filter lookahead/history across arbitrary chunk boundaries, performs the existing windowed-sinc low-pass conversion from 24 kHz to 8 kHz, and flushes the mathematically rounded final sample count exactly once. It adds no capacity padding, duplicate tail, synthetic silence, or per-delta filter reset. The resulting μ-law bytes accumulate only until one configured carrier packet (100 ms/800 bytes by default) is available, then enter the monotonic pacing schedule immediately. A provider response mark is sent only after the final resampler flush and final media packet.
+
+Work required before the first carrier media packet is now: finalized assistant response persistence, OpenAI TTS request startup, receipt of enough PCM for the resampler's bounded lookahead, conversion/μ-law encoding, and confirmation of media readiness. Remaining TTS deltas, final conversion, later paced media packets, the response mark, and mark acknowledgement happen after the first media packet. This structural change removes full-TTS and full-resample buffering from the critical path; it does not claim a measured production improvement until a controlled later deployment validates it.
+
+The authenticated Twilio `connected` and `start` messages establish the current stream SID before the session is created. `IRealtimeAudioTransport.WaitForMediaReadyAsync` makes that boundary explicit to the session. Greeting synthesis may run concurrently, but its bounded updates are held until that signal completes; playback is released once through the same response path used by later turns. Session cancellation, provider disconnect, or startup timeout cancels that wait and the TTS stream without regenerating or duplicating the greeting. No synchronization sleep is used.
 
 ## Turn detection and backpressure
 
@@ -114,13 +126,13 @@ For each finalized caller utterance:
 3. The LLM receives the configured system instructions plus the bounded recent Caller/Assistant history.
 4. The response is constrained for spoken output.
 5. The Assistant turn is durably persisted.
-6. TTS produces PCM chunks, which the transport sends in sequence.
+6. TTS streams PCM deltas; the stateful transport converts and sends valid audio incrementally, then sends one final response mark.
 
 Partial STT results and raw provider messages are not persisted. Only finalized Caller and Assistant text uses the existing Conversation transcript model.
 
 ## Interruption and cancellation
 
-When new caller speech begins while the runtime is `Thinking` or `Speaking`, it cancels the active operation, invokes `IRealtimeAudioTransport.ClearPlaybackAsync`, publishes `Interrupted`, and continues detecting the new caller turn. The Twilio implementation sends the provider `clear` control message so queued AI audio does not continue speaking over the caller.
+When new caller speech begins while the runtime is `Thinking` or `Speaking`, it invalidates the active response generation, cancels the linked LLM/TTS/send operation, invokes `IRealtimeAudioTransport.ClearPlaybackAsync`, publishes `Interrupted`, and continues detecting the new caller turn. The Twilio send and clear operations share a serialization gate: incomplete resampler state and unsent μ-law data are discarded before `clear`, pending marks are cleared, and no old-generation media or mark can be written afterward. A later response always creates independent synthesis, resampler, pacing, and mark state.
 
 One linked session cancellation tree covers receive, turn detection, STT, LLM, TTS, and audio send. Cancellation is triggered by:
 
@@ -252,11 +264,17 @@ voice.session
   audio.receive
 ```
 
-Metrics include active voice sessions, completed voice turns, turn duration, interruptions, failures, and existing STT/AI/TTS request/failure/duration instruments. Metric dimensions are limited to low-cardinality provider, result, direction, language, or adapter values.
+Structured monotonic latency events correlate a safe internal call/conversation/turn/response identity and record stage, duration, elapsed time from endpoint, adapter, and bounded result code. Stages include endpoint finalization; STT start/completion; caller persistence start/end; LLM start/completion; assistant persistence start/end; TTS start/first audio/completion; and first Twilio media. Existing playback diagnostics cover first media, final media, mark sent, acknowledgement, clear, and cancellation. A provider API that does not expose a useful first STT or LLM datum does not fabricate one.
+
+Metrics include active voice sessions, completed voice turns, turn duration, interruptions, failures, voice endpoint latency, STT duration, LLM duration, TTS time-to-first-audio and total duration, first-audio transport delay, endpoint-to-first-media, and total turn latency. Metric dimensions are limited to low-cardinality provider, result, direction, language, or adapter values.
 
 Call, conversation, correlation, and provider stream identities may be used for operational correlation where the existing tracing policy permits them, but never as metric dimensions. Telemetry must not contain caller speech, transcript text, AI text, prompts, audio, phone numbers, patient data, credentials, tokens, raw provider payloads, or full exception messages.
 
 Provider WebSocket callbacks do not fabricate W3C ancestry. Business call/correlation identity associates work when no remote trace context exists.
+
+## Remaining latency and scope boundaries
+
+Task 16.1 does not change external OpenAI Responses latency, external speech startup latency, telephone G.711 bandwidth, Render free-tier cold starts/resource contention, the finalized-utterance STT architecture, VAD thresholds, or process-local ownership of active media sessions. It does not pipeline partial LLM text into TTS, add filler speech, scheduling, patient lookup, tools, RAG, transfer, or provider-side authoritative conversation state. Endpointing and STT remain separately measurable so a later live validation can identify their actual contribution without weakening the hardened turn detector.
 
 ## Configuration
 

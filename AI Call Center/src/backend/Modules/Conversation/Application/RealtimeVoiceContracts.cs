@@ -38,6 +38,8 @@ public interface IRealtimeAudioTransport : IAsyncDisposable
 
     IAsyncEnumerable<RealtimeAudioFrame> ReceiveAsync(CancellationToken cancellationToken);
 
+    ValueTask WaitForMediaReadyAsync(CancellationToken cancellationToken) => ValueTask.CompletedTask;
+
     ValueTask<RealtimeAudioSendResult> SendAsync(SynthesizedAudioChunk chunk, CancellationToken cancellationToken);
 
     ValueTask<RealtimePlaybackCompletion> WaitForPlaybackCompletionAsync(

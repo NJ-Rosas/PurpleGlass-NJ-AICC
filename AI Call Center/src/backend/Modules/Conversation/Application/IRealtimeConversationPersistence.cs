@@ -32,6 +32,7 @@ public interface IVoiceSessionDiagnostics
     void RecordInboundTurn(VoiceInboundTurnDiagnostic diagnostic) { }
     void RecordOutboundResponse(VoiceOutboundResponseDiagnostic diagnostic) { }
     void RecordPlaybackEvent(VoicePlaybackEventDiagnostic diagnostic) { }
+    void RecordLatency(VoiceLatencyDiagnostic diagnostic) { }
 }
 
 public sealed record ConversationModelTurnDiagnostic(
@@ -87,6 +88,18 @@ public sealed record VoicePlaybackEventDiagnostic(
     double ElapsedMs = 0,
     double ElapsedFromFirstMediaMs = 0,
     double ElapsedFromMarkSentMs = 0);
+
+public sealed record VoiceLatencyDiagnostic(
+    Guid CallId,
+    Guid? ConversationId,
+    Guid CorrelationId,
+    string TurnId,
+    string ResponseId,
+    string Stage,
+    double DurationMs,
+    double ElapsedFromEndpointMs,
+    string Adapter,
+    string Result);
 
 public sealed record VoiceSessionExceptionDiagnostic(
     Guid CallId,

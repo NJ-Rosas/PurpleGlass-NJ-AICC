@@ -2,4 +2,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\..\Modules\Conversation\Application\PurpleGlass.Modules.Conversation.Application.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="OpenAI" />
+  </ItemGroup>
 </Project>

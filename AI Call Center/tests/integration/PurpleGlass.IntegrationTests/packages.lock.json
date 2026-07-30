@@ -544,6 +544,7 @@
       "purpleglass.adapters.speech.openai": {
         "type": "Project",
         "dependencies": {
+          "OpenAI": "[2.12.0, )",
           "PurpleGlass.Modules.Conversation.Application": "[1.0.0, )"
         }
       },

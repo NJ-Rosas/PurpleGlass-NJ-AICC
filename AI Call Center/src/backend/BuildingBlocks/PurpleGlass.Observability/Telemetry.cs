@@ -39,6 +39,11 @@ public static class PurpleGlassTelemetry
     public static readonly UpDownCounter<long> ActiveVoiceSessions = Meter.CreateUpDownCounter<long>("purpleglass.voice.sessions.active");
     public static readonly Counter<long> VoiceTurns = Meter.CreateCounter<long>("purpleglass.voice.turns.total");
     public static readonly Histogram<double> VoiceTurnDuration = Meter.CreateHistogram<double>("purpleglass.voice.turn.duration", "ms");
+    public static readonly Histogram<double> VoiceEndpointLatency = Meter.CreateHistogram<double>("purpleglass.voice.endpoint.duration", "ms");
+    public static readonly Histogram<double> VoiceTtsFirstAudio = Meter.CreateHistogram<double>("purpleglass.voice.tts.first_audio", "ms");
+    public static readonly Histogram<double> VoiceFirstAudioTransportDelay = Meter.CreateHistogram<double>("purpleglass.voice.transport.first_audio", "ms");
+    public static readonly Histogram<double> VoiceEndpointToFirstMedia = Meter.CreateHistogram<double>("purpleglass.voice.endpoint_to_first_media", "ms");
+    public static readonly Histogram<double> VoiceTotalTurnLatency = Meter.CreateHistogram<double>("purpleglass.voice.turn.total_latency", "ms");
     public static readonly Counter<long> VoiceInterruptions = Meter.CreateCounter<long>("purpleglass.voice.interruptions");
     public static readonly Counter<long> VoiceFailures = Meter.CreateCounter<long>("purpleglass.voice.failures");
     public static readonly Counter<long> OutboxLeased = Meter.CreateCounter<long>("purpleglass.outbox.leased");

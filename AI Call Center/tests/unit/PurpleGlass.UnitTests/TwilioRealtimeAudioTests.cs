@@ -364,6 +364,35 @@ public sealed class TwilioRealtimeAudioTests
     }
 
     [Fact]
+    public async Task NonFinalPcmChunkSendsMediaImmediatelyAndDefersMarkUntilFinalChunk()
+    {
+        var socket = InitializedSocket();
+        TwilioRealtimeAudioTransport transport = await InitializeAsync(socket);
+        byte[] firstChunk = SinePcm(24_000, 1_000, 0.20, 10_000);
+
+        RealtimeAudioSendResult partial = await transport.SendAsync(new SynthesizedAudioChunk(
+            1, AudioFormat.Pcm16(24_000), firstChunk, IsFinal: false), default);
+
+        Assert.True(partial.MediaMessageCount > 0);
+        Assert.False(partial.MarkSent);
+        Assert.NotEmpty(socket.SentTextMessages);
+        Assert.All(socket.SentTextMessages, message =>
+        {
+            using JsonDocument json = JsonDocument.Parse(message);
+            Assert.Equal("media", json.RootElement.GetProperty("event").GetString());
+        });
+
+        RealtimeAudioSendResult completed = await transport.SendAsync(new SynthesizedAudioChunk(
+            2, AudioFormat.Pcm16(24_000), ReadOnlyMemory<byte>.Empty, IsFinal: true), default);
+
+        Assert.True(completed.MarkSent);
+        using JsonDocument last = JsonDocument.Parse(socket.SentTextMessages[^1]);
+        Assert.Equal("mark", last.RootElement.GetProperty("event").GetString());
+        Assert.Equal(partial.ResponseId, completed.ResponseId);
+        await transport.DisposeAsync();
+    }
+
+    [Fact]
     public async Task FinalPartialChunkUsesOnlyValidSamplesAndAddsNoPadding()
     {
         byte[] source = SinePcm(24_000, 900, 0.10004, 8_000);

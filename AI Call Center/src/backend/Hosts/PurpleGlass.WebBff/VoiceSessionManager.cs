@@ -169,6 +169,12 @@ public sealed partial class BffVoiceSessionDiagnostics(ILogger<BffVoiceSessionDi
             diagnostic.BufferedAudioDurationMs, diagnostic.SafeReason, diagnostic.ElapsedMs,
             diagnostic.ElapsedFromFirstMediaMs, diagnostic.ElapsedFromMarkSentMs);
 
+    public void RecordLatency(VoiceLatencyDiagnostic diagnostic) =>
+        LogLatency(logger, diagnostic.CallId, diagnostic.ConversationId,
+            diagnostic.CorrelationId, diagnostic.TurnId, diagnostic.ResponseId,
+            diagnostic.Stage, diagnostic.DurationMs, diagnostic.ElapsedFromEndpointMs,
+            diagnostic.Adapter, diagnostic.Result);
+
     [LoggerMessage(204, LogLevel.Error,
         "Realtime voice session exception; CallId={CallId}, ConversationId={ConversationId}, TenantId={TenantId}, LocationId={LocationId}, Provider={Provider}, ProviderCallId={ProviderCallId}, CorrelationId={CorrelationId}, Stage={Stage}, SafeCode={SafeCode}, ExceptionType={ExceptionType}, RootExceptionType={RootExceptionType}.")]
     private static partial void LogSessionException(ILogger logger, Guid callId, Guid? conversationId,
@@ -201,6 +207,12 @@ public sealed partial class BffVoiceSessionDiagnostics(ILogger<BffVoiceSessionDi
         string responseId, string @event, int mediaMessagesSent,
         double bufferedAudioDurationMs, string safeReason, double elapsedMs,
         double elapsedFromFirstMediaMs, double elapsedFromMarkSentMs);
+
+    [LoggerMessage(210, LogLevel.Information,
+        "Realtime voice latency; CallId={CallId}, ConversationId={ConversationId}, CorrelationId={CorrelationId}, TurnId={TurnId}, ResponseId={ResponseId}, Stage={Stage}, DurationMs={DurationMs}, ElapsedFromEndpointMs={ElapsedFromEndpointMs}, Adapter={Adapter}, Result={Result}.")]
+    private static partial void LogLatency(ILogger logger, Guid callId, Guid? conversationId,
+        Guid correlationId, string turnId, string responseId, string stage,
+        double durationMs, double elapsedFromEndpointMs, string adapter, string result);
 }
 
 public sealed class VoiceSessionConflictException(string code) : Exception("A voice session is already active for this call.")

@@ -16,9 +16,7 @@ public sealed class TwilioRealtimeAudioTransport : IRealtimeAudioTransport
     private readonly SemaphoreSlim sendGate = new(1, 1);
     private readonly object playbackSynchronization = new();
     private readonly Dictionary<string, PendingPlayback> pendingMarks = new(StringComparer.Ordinal);
-    private MemoryStream? pendingPcm;
-    private AudioFormat? pendingFormat;
-    private long nextChunkSequence = 1;
+    private OutboundResponse? outboundResponse;
     private long markSequence;
     private long lastInboundMediaChunk;
     private int lastInboundTimestamp = -1;
@@ -48,6 +46,13 @@ public sealed class TwilioRealtimeAudioTransport : IRealtimeAudioTransport
 
     public AudioFormat InputFormat => StartMetadata.InputFormat;
 
+    public ValueTask WaitForMediaReadyAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        ThrowIfUnavailable();
+        return ValueTask.CompletedTask;
+    }
+
     public async IAsyncEnumerable<RealtimeAudioFrame> ReceiveAsync(
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
@@ -71,97 +76,76 @@ public sealed class TwilioRealtimeAudioTransport : IRealtimeAudioTransport
         ValidatePcmChunk(chunk);
 
         await sendGate.WaitAsync(cancellationToken);
-        byte[] pcm = [];
+        byte[] convertedPcm = [];
         byte[] encoded = [];
-        int mediaMessageCount = 0;
         try
         {
             ThrowIfUnavailable();
-            AppendChunkLocked(chunk);
-            if (!chunk.IsFinal) return RealtimeAudioSendResult.Pending;
-
-            byte[] responsePcm = TakePendingPcmLocked();
-            int sourcePcmBytes = responsePcm.Length;
-            if (sourcePcmBytes == 0)
-                throw new TwilioRealtimeAudioException(
-                    "provider_media_pcm_invalid", "PCM audio response was empty.");
-            try
-            {
-                pcm = chunk.Format.SampleRateHz == TwilioRealtimeAudioProtocol.TelephonySampleRate
-                    ? responsePcm.ToArray()
-                    : TwilioMuLawCodec.ResamplePcm16Mono(
-                        responsePcm,
-                        chunk.Format.SampleRateHz,
-                        TwilioRealtimeAudioProtocol.TelephonySampleRate);
-            }
-            finally
-            {
-                CryptographicOperations.ZeroMemory(responsePcm);
-            }
-            encoded = TwilioMuLawCodec.EncodePcm16(pcm);
+            OutboundResponse response = GetOrCreateResponse(chunk);
+            response.AppendSource(chunk, options.MaxPcmResponseBytes);
+            convertedPcm = response.Resampler.Convert(chunk.Audio.Span, chunk.IsFinal);
+            encoded = TwilioMuLawCodec.EncodePcm16(convertedPcm);
+            response.AppendMuLaw(encoded);
 
             int pacedMediaBytes = options.OutboundPacketBytes;
-            long pacingStarted = timeProvider.GetTimestamp();
-            long firstMediaSent = 0;
-            for (int offset = 0; offset < encoded.Length; offset += pacedMediaBytes)
+            while (response.BufferedMuLawBytes >= pacedMediaBytes
+                || (chunk.IsFinal && response.BufferedMuLawBytes > 0))
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                int length = Math.Min(pacedMediaBytes, encoded.Length - offset);
-                string payload = Convert.ToBase64String(encoded, offset, length);
+                int length = Math.Min(pacedMediaBytes, response.BufferedMuLawBytes);
+                if (options.EnableOutboundPacing && response.MediaMessageCount > 0)
+                {
+                    TimeSpan targetElapsed = options.OutboundPacketDuration * response.MediaMessageCount;
+                    TimeSpan remaining = targetElapsed - timeProvider.GetElapsedTime(response.PacingStartedTimestamp);
+                    if (remaining > TimeSpan.Zero)
+                        await Task.Delay(remaining, timeProvider, cancellationToken);
+                }
+                byte[] packet = response.TakeMuLaw(length);
+                string payload = Convert.ToBase64String(packet);
+                CryptographicOperations.ZeroMemory(packet);
                 await SendWireMessageAsync(new
                 {
                     @event = "media",
                     streamSid = ProviderMediaStreamId,
                     media = new { payload },
                 }, cancellationToken);
-                mediaMessageCount++;
-                if (firstMediaSent == 0) firstMediaSent = timeProvider.GetTimestamp();
-                if (options.EnableOutboundPacing && offset + length < encoded.Length)
-                {
-                    TimeSpan targetElapsed = options.OutboundPacketDuration * mediaMessageCount;
-                    TimeSpan remaining = targetElapsed - timeProvider.GetElapsedTime(pacingStarted);
-                    if (remaining > TimeSpan.Zero)
-                        await Task.Delay(remaining, timeProvider, cancellationToken);
-                }
+                response.RecordMediaSent(length, timeProvider.GetTimestamp());
             }
 
-            if (mediaMessageCount == 0 || encoded.Length == 0)
-                throw new TwilioRealtimeAudioException(
-                    "provider_media_output_empty", "PCM audio produced no provider media.");
+            if (!chunk.IsFinal)
+                return response.Result(markSent: false, options);
 
-            string name = $"response-{Interlocked.Increment(ref markSequence)}";
+            if (response.MediaMessageCount == 0 || response.TotalMuLawBytes == 0)
+                throw new TwilioRealtimeAudioException(
+                    "provider_media_pcm_invalid", "PCM audio response was empty.");
+
             long markSent = timeProvider.GetTimestamp();
-            var pending = new PendingPlayback(firstMediaSent, markSent);
-            lock (playbackSynchronization) pendingMarks.Add(name, pending);
+            var pending = new PendingPlayback(response.FirstMediaSentTimestamp, markSent);
+            lock (playbackSynchronization) pendingMarks.Add(response.ResponseId, pending);
             try
             {
                 await SendWireMessageAsync(new
                 {
                     @event = "mark",
                     streamSid = ProviderMediaStreamId,
-                    mark = new { name },
+                    mark = new { name = response.ResponseId },
                 }, cancellationToken);
             }
             catch
             {
-                lock (playbackSynchronization) pendingMarks.Remove(name);
+                lock (playbackSynchronization) pendingMarks.Remove(response.ResponseId);
                 throw;
             }
-            Activity.Current?.SetTag("voice.source_pcm_bytes", sourcePcmBytes);
-            Activity.Current?.SetTag("voice.source_samples", sourcePcmBytes / sizeof(short));
-            Activity.Current?.SetTag("voice.resampled_samples", pcm.Length / sizeof(short));
-            Activity.Current?.SetTag("voice.mulaw_bytes", encoded.Length);
-            Activity.Current?.SetTag("voice.media_message_count", mediaMessageCount);
+            Activity.Current?.SetTag("voice.source_pcm_bytes", response.SourcePcmBytes);
+            Activity.Current?.SetTag("voice.source_samples", response.Resampler.SourceSampleCount);
+            Activity.Current?.SetTag("voice.resampled_samples", response.Resampler.OutputSampleCount);
+            Activity.Current?.SetTag("voice.mulaw_bytes", response.TotalMuLawBytes);
+            Activity.Current?.SetTag("voice.media_message_count", response.MediaMessageCount);
             Activity.Current?.SetTag("voice.mark_sent", true);
-            return new RealtimeAudioSendResult(
-                name,
-                sourcePcmBytes,
-                sourcePcmBytes / sizeof(short),
-                pcm.Length / sizeof(short),
-                encoded.Length,
-                mediaMessageCount,
-                true,
-                options.EnableOutboundPacing ? options.OutboundPacketDuration.TotalMilliseconds : 0);
+            RealtimeAudioSendResult result = response.Result(markSent: true, options);
+            outboundResponse = null;
+            response.Dispose();
+            return result;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -169,15 +153,21 @@ public sealed class TwilioRealtimeAudioTransport : IRealtimeAudioTransport
                 "voice.media_suppressed_generation_stale",
                 tags: new ActivityTagsCollection
                 {
-                    ["voice.media_messages_sent"] = mediaMessageCount,
+                    ["voice.media_messages_sent"] = outboundResponse?.MediaMessageCount ?? 0,
                     ["voice.safe_reason"] = "response_canceled",
                 }));
+            ResetOutboundResponseLocked();
+            throw;
+        }
+        catch
+        {
+            ResetOutboundResponseLocked();
             throw;
         }
         finally
         {
             sendGate.Release();
-            CryptographicOperations.ZeroMemory(pcm);
+            CryptographicOperations.ZeroMemory(convertedPcm);
             CryptographicOperations.ZeroMemory(encoded);
         }
     }
@@ -208,47 +198,52 @@ public sealed class TwilioRealtimeAudioTransport : IRealtimeAudioTransport
     public async ValueTask ClearPlaybackAsync(CancellationToken cancellationToken)
     {
         ThrowIfUnavailable();
-        ResetPendingPcmLocked();
-        KeyValuePair<string, PendingPlayback>[] cleared;
-        lock (playbackSynchronization)
+        await sendGate.WaitAsync(cancellationToken);
+        try
         {
-            cleared = pendingMarks.ToArray();
-            foreach (KeyValuePair<string, PendingPlayback> entry in cleared)
-                entry.Value.MarkCleared();
+            ResetOutboundResponseLocked();
+            KeyValuePair<string, PendingPlayback>[] cleared;
+            lock (playbackSynchronization)
+            {
+                cleared = pendingMarks.ToArray();
+                foreach (KeyValuePair<string, PendingPlayback> entry in cleared)
+                    entry.Value.MarkCleared();
+            }
+            await SendWireMessageAsync(new
+            {
+                @event = "clear",
+                streamSid = ProviderMediaStreamId,
+            }, cancellationToken);
+            long now = timeProvider.GetTimestamp();
+            foreach ((string responseId, PendingPlayback pending) in cleared)
+                pending.Completion.TrySetResult(pending.Result(responseId, false, true, timeProvider, now));
+            Activity.Current?.AddEvent(new ActivityEvent("voice.twilio_clear_sent"));
         }
-        await SendWireMessageAsync(new
-        {
-            @event = "clear",
-            streamSid = ProviderMediaStreamId,
-        }, cancellationToken);
-        long now = timeProvider.GetTimestamp();
-        foreach ((string responseId, PendingPlayback pending) in cleared)
-        {
-            pending.Completion.TrySetResult(pending.Result(responseId, false, true, timeProvider, now));
-        }
-        Activity.Current?.AddEvent(new ActivityEvent("voice.twilio_clear_sent"));
+        finally { sendGate.Release(); }
     }
 
     public async ValueTask CompleteAsync(string reason, CancellationToken cancellationToken)
     {
         if (Interlocked.Exchange(ref completed, 1) != 0) return;
-        await writeLock.WaitAsync(cancellationToken);
+        await sendGate.WaitAsync(cancellationToken);
         try
         {
-            string safeReason = SafeCloseReason(reason);
-            if (socket.State == WebSocketState.Open)
-                await socket.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, safeReason, cancellationToken);
-            else if (socket.State == WebSocketState.CloseReceived)
-                await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, safeReason, cancellationToken);
+            ResetOutboundResponseLocked();
+            await writeLock.WaitAsync(cancellationToken);
+            try
+            {
+                string safeReason = SafeCloseReason(reason);
+                if (socket.State == WebSocketState.Open)
+                    await socket.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, safeReason, cancellationToken);
+                else if (socket.State == WebSocketState.CloseReceived)
+                    await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, safeReason, cancellationToken);
+            }
+            catch (WebSocketException)
+            {
+            }
+            finally { writeLock.Release(); }
         }
-        catch (WebSocketException)
-        {
-        }
-        finally
-        {
-            ResetPendingPcmLocked();
-            writeLock.Release();
-        }
+        finally { sendGate.Release(); }
     }
 
     public async ValueTask DisposeAsync()
@@ -417,8 +412,7 @@ public sealed class TwilioRealtimeAudioTransport : IRealtimeAudioTransport
         AudioFormat format = chunk.Format.Validate();
         if (!string.Equals(format.Encoding, "audio/pcm", StringComparison.OrdinalIgnoreCase)
             || format.BitsPerSample != 16
-            || format.Channels != 1
-            || (chunk.Audio.Length & 1) != 0)
+            || format.Channels != 1)
             throw new TwilioRealtimeAudioException(
                 "provider_media_pcm_unsupported", "Synthesized audio format was unsupported.");
         if (chunk.Audio.Length > options.MaxPcmChunkBytes)
@@ -426,57 +420,123 @@ public sealed class TwilioRealtimeAudioTransport : IRealtimeAudioTransport
                 "provider_media_pcm_too_large", "PCM audio exceeded its size limit.");
     }
 
-    private void AppendChunkLocked(SynthesizedAudioChunk chunk)
+    private OutboundResponse GetOrCreateResponse(SynthesizedAudioChunk chunk)
     {
-        if (chunk.Sequence != nextChunkSequence)
+        if (outboundResponse is null)
         {
-            ResetPendingPcmLocked();
-            throw new TwilioRealtimeAudioException(
-                "provider_media_sequence_invalid", "Synthesized audio chunks were out of sequence.");
+            if (chunk.Sequence != 1)
+                throw new TwilioRealtimeAudioException(
+                    "provider_media_sequence_invalid", "Synthesized audio chunks were out of sequence.");
+            outboundResponse = new OutboundResponse(
+                $"response-{Interlocked.Increment(ref markSequence)}",
+                chunk.Format,
+                timeProvider.GetTimestamp());
         }
-
-        if (pendingFormat is null)
+        else if (outboundResponse.Format != chunk.Format)
         {
-            pendingFormat = chunk.Format;
-            pendingPcm = new MemoryStream(Math.Min(options.MaxPcmResponseBytes, 16 * 1024));
-        }
-        else if (pendingFormat != chunk.Format)
-        {
-            ResetPendingPcmLocked();
+            ResetOutboundResponseLocked();
             throw new TwilioRealtimeAudioException(
                 "provider_media_pcm_unsupported", "Synthesized audio format changed within a response.");
         }
+        return outboundResponse;
+    }
 
-        if (pendingPcm!.Length + chunk.Audio.Length > options.MaxPcmResponseBytes)
+    private void ResetOutboundResponseLocked()
+    {
+        if (outboundResponse is null) return;
+        outboundResponse.Dispose();
+        outboundResponse = null;
+    }
+
+    private sealed class OutboundResponse : IDisposable
+    {
+        private readonly MemoryStream pendingMuLaw = new();
+        private int pendingReadOffset;
+        private long nextSequence = 1;
+
+        public OutboundResponse(string responseId, AudioFormat format, long pacingStartedTimestamp)
         {
-            ResetPendingPcmLocked();
-            throw new TwilioRealtimeAudioException(
-                "provider_media_pcm_too_large", "PCM audio response exceeded its size limit.");
+            ResponseId = responseId;
+            Format = format;
+            PacingStartedTimestamp = pacingStartedTimestamp;
+            Resampler = new StreamingPcm16Resampler(
+                format.SampleRateHz,
+                TwilioRealtimeAudioProtocol.TelephonySampleRate);
         }
 
-        pendingPcm.Write(chunk.Audio.Span);
-        nextChunkSequence++;
-    }
+        public string ResponseId { get; }
+        public AudioFormat Format { get; }
+        public StreamingPcm16Resampler Resampler { get; }
+        public long PacingStartedTimestamp { get; private set; }
+        public long FirstMediaSentTimestamp { get; private set; }
+        public int SourcePcmBytes { get; private set; }
+        public int TotalMuLawBytes { get; private set; }
+        public int MediaMessageCount { get; private set; }
+        public int BufferedMuLawBytes => checked((int)pendingMuLaw.Length - pendingReadOffset);
 
-    private byte[] TakePendingPcmLocked()
-    {
-        byte[] response = pendingPcm?.ToArray() ?? [];
-        ResetPendingPcmLocked();
-        return response;
-    }
-
-    private void ResetPendingPcmLocked()
-    {
-        if (pendingPcm is not null)
+        public void AppendSource(SynthesizedAudioChunk chunk, int maximumResponseBytes)
         {
-            if (pendingPcm.TryGetBuffer(out ArraySegment<byte> buffer))
+            if (chunk.Sequence != nextSequence)
+                throw new TwilioRealtimeAudioException(
+                    "provider_media_sequence_invalid", "Synthesized audio chunks were out of sequence.");
+            nextSequence++;
+            int nextLength = checked(SourcePcmBytes + chunk.Audio.Length);
+            if (nextLength > maximumResponseBytes)
+                throw new TwilioRealtimeAudioException(
+                    "provider_media_pcm_too_large", "PCM audio response exceeded its size limit.");
+            SourcePcmBytes = nextLength;
+        }
+
+        public void AppendMuLaw(ReadOnlySpan<byte> bytes)
+        {
+            if (bytes.Length == 0) return;
+            pendingMuLaw.Position = pendingMuLaw.Length;
+            pendingMuLaw.Write(bytes);
+            TotalMuLawBytes = checked(TotalMuLawBytes + bytes.Length);
+        }
+
+        public byte[] TakeMuLaw(int length)
+        {
+            if (length <= 0 || length > BufferedMuLawBytes) throw new ArgumentOutOfRangeException(nameof(length));
+            var packet = new byte[length];
+            pendingMuLaw.Position = pendingReadOffset;
+            int read = pendingMuLaw.Read(packet, 0, length);
+            if (read != length) throw new InvalidOperationException("Buffered media was incomplete.");
+            pendingReadOffset += length;
+            if (pendingReadOffset == pendingMuLaw.Length)
+            {
+                pendingMuLaw.SetLength(0);
+                pendingReadOffset = 0;
+            }
+            return packet;
+        }
+
+        public void RecordMediaSent(int length, long timestamp)
+        {
+            if (MediaMessageCount == 0)
+            {
+                FirstMediaSentTimestamp = timestamp;
+                PacingStartedTimestamp = timestamp;
+            }
+            MediaMessageCount++;
+        }
+
+        public RealtimeAudioSendResult Result(bool markSent, TwilioRealtimeAudioOptions options) => new(
+            ResponseId,
+            SourcePcmBytes,
+            Resampler.SourceSampleCount,
+            Resampler.OutputSampleCount,
+            TotalMuLawBytes,
+            MediaMessageCount,
+            markSent,
+            options.EnableOutboundPacing ? options.OutboundPacketDuration.TotalMilliseconds : 0);
+
+        public void Dispose()
+        {
+            if (pendingMuLaw.TryGetBuffer(out ArraySegment<byte> buffer))
                 CryptographicOperations.ZeroMemory(buffer.AsSpan());
-            pendingPcm.Dispose();
+            pendingMuLaw.Dispose();
         }
-
-        pendingPcm = null;
-        pendingFormat = null;
-        nextChunkSequence = 1;
     }
 
     private void ThrowIfUnavailable()

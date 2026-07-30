@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading.Channels;
+using System.Collections.Concurrent;
 using PurpleGlass.Modules.Conversation.Contracts;
 using PurpleGlass.Modules.Conversation.Domain;
 using PurpleGlass.Observability;
@@ -34,6 +35,7 @@ public sealed class RealtimeVoiceSession(
     private bool activeResponseCleared;
     private bool stopRequested;
     private int started;
+    private readonly ConcurrentDictionary<Guid, long> endpointTimestamps = new();
 
     public VoiceSessionState State
     {
@@ -109,20 +111,15 @@ public sealed class RealtimeVoiceSession(
             Task receiveTask = ReceiveAudioAsync(audio.Writer, sessionToken);
             Task detectTask = DetectTurnsAsync(audio.Reader, utterances.Writer, sessionToken);
             Task processTask = ProcessTurnsAsync(utterances.Reader, sessionToken);
-
-            try
+            Task greetingTask = SpeakGreetingAsync();
+            Task startupCompleted = await Task.WhenAny(greetingTask, receiveTask, detectTask, processTask);
+            if (!ReferenceEquals(startupCompleted, greetingTask))
             {
-                await SpeakAsync(options.Conversation.Greeting, null, sessionToken);
+                transportDisconnected = receiveTask.IsCompletedSuccessfully;
+                source.Cancel();
+                await Task.WhenAll(receiveTask, detectTask, processTask, greetingTask);
             }
-            catch (OperationCanceledException) when (!sessionToken.IsCancellationRequested)
-            {
-                // Caller barge-in cancels greeting playback, not the call-scoped session.
-            }
-            catch (VoicePipelineException exception)
-            {
-                RecordFailure(exception.Code);
-                await PublishStateAsync(VoiceSessionState.Failed, exception.Code, CancellationToken.None);
-            }
+            await greetingTask;
             bool operationInProgress;
             lock (synchronization) operationInProgress = activeOperation is not null;
             if (!operationInProgress && State is not (VoiceSessionState.Interrupted or VoiceSessionState.Failed))
@@ -140,6 +137,23 @@ public sealed class RealtimeVoiceSession(
                 failed = true;
                 RecordFailure(completionFailure);
                 await PublishStateAsync(VoiceSessionState.Failed, completionFailure, CancellationToken.None);
+            }
+
+            async Task SpeakGreetingAsync()
+            {
+                try
+                {
+                    await SpeakAsync(options.Conversation.Greeting, null, sessionToken);
+                }
+                catch (OperationCanceledException) when (!sessionToken.IsCancellationRequested)
+                {
+                    // Caller barge-in cancels greeting playback, not the call-scoped session.
+                }
+                catch (VoicePipelineException exception)
+                {
+                    RecordFailure(exception.Code);
+                    await PublishStateAsync(VoiceSessionState.Failed, exception.Code, CancellationToken.None);
+                }
             }
         }
         catch (OperationCanceledException) when (sessionToken.IsCancellationRequested)
@@ -307,6 +321,11 @@ public sealed class RealtimeVoiceSession(
                 }
                 if (result.FinalizedUtterance is not null)
                 {
+                    long endpointTimestamp = timeProvider.GetTimestamp();
+                    endpointTimestamps[result.FinalizedUtterance.TurnId] = endpointTimestamp;
+                    PurpleGlassTelemetry.VoiceEndpointLatency.Record(
+                        (result.FinalizedUtterance.Duration ?? TimeSpan.Zero).TotalMilliseconds,
+                        new KeyValuePair<string, object?>("provider", identity!.Provider));
                     diagnostics.RecordInboundTurn(new VoiceInboundTurnDiagnostic(
                         identity!.CallId,
                         identity.CorrelationId,
@@ -404,6 +423,9 @@ public sealed class RealtimeVoiceSession(
         VoiceSessionIdentity sessionIdentity = identity
             ?? throw new InvalidOperationException("Voice session identity is unavailable.");
         long startedAt = timeProvider.GetTimestamp();
+        long endpointTimestamp = endpointTimestamps.TryRemove(utterance.TurnId, out long recordedEndpoint)
+            ? recordedEndpoint : startedAt;
+        var timing = new TurnLatency(utterance.TurnId, endpointTimestamp);
         using Activity? turnActivity = PurpleGlassTelemetry.Calls.StartActivity("voice.turn", ActivityKind.Internal);
         turnActivity?.SetTag("voice.provider", sessionIdentity.Provider);
         turnActivity?.SetTag("voice.language", options.Conversation.Language);
@@ -429,7 +451,7 @@ public sealed class RealtimeVoiceSession(
                 DiscardReason: null,
                 Event: "stt_submitted"));
             RuntimeInvocationContext context = RuntimeContext(callerTurnId.Value);
-            SpeechRecognitionResult recognition = await RecognizeAsync(context, utterance, operation.Token);
+            SpeechRecognitionResult recognition = await RecognizeAsync(context, utterance, timing, operation.Token);
             if (recognition.Failure is not null)
                 throw new VoicePipelineException(recognition.Failure.Code, recognition.Failure.SafeMessage);
             string recognizedText = recognition.RecognizedText.Trim();
@@ -438,12 +460,18 @@ public sealed class RealtimeVoiceSession(
 
             ConversationStatusProjection conversation = await conversations.GetAsync(
                 sessionIdentity.TenantId, conversationId!.Value, operation.Token);
+            long callerPersistStarted = timeProvider.GetTimestamp();
+            RecordLatency(timing, "caller_persistence_started", callerPersistStarted, callerPersistStarted,
+                "persistence", "started");
             _ = await conversations.AddCallerTurnAsync(new AddConversationTurn(
                 sessionIdentity.TenantId, conversation.ConversationId, conversation.Version,
                 callerTurnId.Value, recognizedText, recognition.Confidence,
                 CausationId: callerTurnId.Value, TraceId: Activity.Current?.TraceId.ToString(),
                 StartedAtUtc: recognition.StartedAtUtc ?? utterance.StartedAtUtc,
                 EndedAtUtc: recognition.EndedAtUtc ?? utterance.EndedAtUtc), sessionToken);
+            long callerPersistEnded = timeProvider.GetTimestamp();
+            RecordLatency(timing, "caller_persistence_completed", callerPersistStarted, callerPersistEnded,
+                "persistence", "success");
 
             operation.Token.ThrowIfCancellationRequested();
 
@@ -452,18 +480,24 @@ public sealed class RealtimeVoiceSession(
             IReadOnlyList<LiveTranscriptTurn> transcript = await conversations.GetTranscriptAsync(
                 sessionIdentity.TenantId, conversation.ConversationId, sessionToken);
             await PublishStateAsync(VoiceSessionState.Thinking, null, operation.Token);
-            AiResponseResult response = await GenerateAsync(context, transcript, recognizedText, operation.Token);
+            AiResponseResult response = await GenerateAsync(context, transcript, recognizedText, timing, operation.Token);
             if (response.Failure is not null)
                 throw new VoicePipelineException(response.Failure.Code, response.Failure.SafeMessage);
             string assistantText = VoiceResponsePolicy.Constrain(
                 response.AssistantText, options.Conversation.MaximumResponseCharacters);
             Guid assistantTurnId = DeterministicId(sessionIdentity.CallId, $"voice:assistant:{callerTurnId:N}");
+            long assistantPersistStarted = timeProvider.GetTimestamp();
+            RecordLatency(timing, "assistant_persistence_started", assistantPersistStarted, assistantPersistStarted,
+                "persistence", "started");
             _ = await conversations.AddAssistantTurnAsync(new AddConversationTurn(
                 sessionIdentity.TenantId, conversation.ConversationId, conversation.Version,
                 assistantTurnId, assistantText,
                 CausationId: utterance.TurnId, TraceId: Activity.Current?.TraceId.ToString()), operation.Token);
+            long assistantPersistEnded = timeProvider.GetTimestamp();
+            RecordLatency(timing, "assistant_persistence_completed", assistantPersistStarted, assistantPersistEnded,
+                "persistence", "success");
             operation.Token.ThrowIfCancellationRequested();
-            await SpeakAsync(assistantText, operation, operation.Token);
+            await SpeakAsync(assistantText, operation, operation.Token, timing);
             await PublishStateAsync(VoiceSessionState.Listening, null, operation.Token);
         }
         catch (OperationCanceledException) when (!sessionToken.IsCancellationRequested)
@@ -502,17 +536,24 @@ public sealed class RealtimeVoiceSession(
                 new KeyValuePair<string, object?>("provider", sessionIdentity.Provider),
                 new KeyValuePair<string, object?>("result", SafeCode(result)),
                 new KeyValuePair<string, object?>("language", options.Conversation.Language));
+            PurpleGlassTelemetry.VoiceTotalTurnLatency.Record(
+                timeProvider.GetElapsedTime(endpointTimestamp).TotalMilliseconds,
+                new KeyValuePair<string, object?>("provider", sessionIdentity.Provider),
+                new KeyValuePair<string, object?>("result", SafeCode(result)));
         }
     }
 
     private async Task<SpeechRecognitionResult> RecognizeAsync(
         RuntimeInvocationContext context,
         FinalizedVoiceUtterance utterance,
+        TurnLatency timing,
         CancellationToken cancellationToken)
     {
         using Activity? activity = PurpleGlassTelemetry.Calls.StartActivity("speech.recognize", ActivityKind.Client);
         PurpleGlassTelemetry.SpeechRecognitionRequests.Add(1);
         long startedAt = timeProvider.GetTimestamp();
+        RecordLatency(timing, "stt_request_started", startedAt, startedAt,
+            speechRecognizer.AdapterKey, "started");
         SpeechRecognitionResult result = await InvokeAsync(
             "recognize", options.RecognitionTimeout,
             token => speechRecognizer.RecognizeAsync(new SpeechRecognitionRequest(
@@ -520,8 +561,11 @@ public sealed class RealtimeVoiceSession(
                 new SpeechAudioInput(utterance.Format, utterance.Audio,
                     $"{identity!.ProviderMediaStreamId}:{utterance.FirstSequence}:{utterance.LastSequence}")), token),
             value => value.Failure, cancellationToken);
-        PurpleGlassTelemetry.SpeechRecognitionDuration.Record(timeProvider.GetElapsedTime(startedAt).TotalMilliseconds,
+        long completedAt = timeProvider.GetTimestamp();
+        PurpleGlassTelemetry.SpeechRecognitionDuration.Record(timeProvider.GetElapsedTime(startedAt, completedAt).TotalMilliseconds,
             new KeyValuePair<string, object?>("adapter", speechRecognizer.AdapterKey));
+        RecordLatency(timing, "stt_completed", startedAt, completedAt,
+            speechRecognizer.AdapterKey, result.Failure?.Code ?? "success");
         return result;
     }
 
@@ -529,11 +573,14 @@ public sealed class RealtimeVoiceSession(
         RuntimeInvocationContext context,
         IReadOnlyList<LiveTranscriptTurn> transcript,
         string callerText,
+        TurnLatency timing,
         CancellationToken cancellationToken)
     {
         using Activity? activity = PurpleGlassTelemetry.Calls.StartActivity("ai.generate", ActivityKind.Client);
         PurpleGlassTelemetry.AiRequests.Add(1);
         long startedAt = timeProvider.GetTimestamp();
+        RecordLatency(timing, "llm_request_started", startedAt, startedAt,
+            languageModel.AdapterKey, "started");
         SanitizedConversationTurn[] history = transcript
             .OrderBy(turn => turn.SequenceNumber)
             .TakeLast(options.Conversation.MaximumHistoryTurns)
@@ -550,6 +597,8 @@ public sealed class RealtimeVoiceSession(
                         options.Conversation.EscalationKeywords, options.Conversation.UrgentKeywords)), token),
                 value => value.Failure, cancellationToken);
             double durationMs = timeProvider.GetElapsedTime(startedAt).TotalMilliseconds;
+            RecordLatency(timing, "llm_completed", startedAt, timeProvider.GetTimestamp(),
+                result.Provider ?? languageModel.AdapterKey, "success");
             PurpleGlassTelemetry.AiDuration.Record(durationMs,
                 new KeyValuePair<string, object?>("adapter", languageModel.AdapterKey));
             diagnostics.RecordModelTurn(new ConversationModelTurnDiagnostic(
@@ -562,6 +611,8 @@ public sealed class RealtimeVoiceSession(
         catch (VoicePipelineException exception)
         {
             double durationMs = timeProvider.GetElapsedTime(startedAt).TotalMilliseconds;
+            RecordLatency(timing, "llm_completed", startedAt, timeProvider.GetTimestamp(),
+                languageModel.AdapterKey, SafeCode(exception.Code));
             PurpleGlassTelemetry.AiDuration.Record(durationMs,
                 new KeyValuePair<string, object?>("adapter", languageModel.AdapterKey));
             diagnostics.RecordModelTurn(new ConversationModelTurnDiagnostic(
@@ -575,7 +626,8 @@ public sealed class RealtimeVoiceSession(
     private async Task SpeakAsync(
         string text,
         CancellationTokenSource? existingOperation,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        TurnLatency? timing = null)
     {
         CancellationTokenSource? ownedOperation = null;
         long generation = 0;
@@ -607,38 +659,105 @@ public sealed class RealtimeVoiceSession(
             using Activity? synthActivity = PurpleGlassTelemetry.Calls.StartActivity("speech.synthesize", ActivityKind.Client);
             PurpleGlassTelemetry.SpeechSynthesisRequests.Add(1);
             long synthesisStarted = timeProvider.GetTimestamp();
-            SpeechSynthesisResult synthesis = await InvokeAsync(
-                "synthesize", options.SynthesisTimeout,
-                token => speechSynthesizer.SynthesizeAsync(new SpeechSynthesisRequest(
-                    RuntimeContext(Guid.NewGuid()), text, options.Conversation.Language,
-                    new VoiceConfiguration(options.Conversation.VoiceId, SpeakingRate: options.Conversation.SpeakingRate)), token),
-                value => value.Failure, existingOperation.Token);
-            PurpleGlassTelemetry.SpeechSynthesisDuration.Record(
-                timeProvider.GetElapsedTime(synthesisStarted).TotalMilliseconds,
-                new KeyValuePair<string, object?>("adapter", speechSynthesizer.AdapterKey));
-            diagnostics.RecordPlaybackEvent(new VoicePlaybackEventDiagnostic(
-                identity.CallId, identity.CorrelationId, diagnosticResponseId,
-                "tts_completed", 0, 0, "provider_completed",
-                ElapsedMs: timeProvider.GetElapsedTime(responseStarted).TotalMilliseconds));
-            IReadOnlyList<SynthesizedAudioChunk> chunks = synthesis.AudioChunks ?? [];
-            if (chunks.Count == 0)
-                throw new VoicePipelineException("speech_synthesis_invalid", "The speech provider returned no audio.");
-            SynthesizedAudioChunk[] orderedChunks = chunks.OrderBy(chunk => chunk.Sequence).ToArray();
-            if (orderedChunks.Count(chunk => chunk.IsFinal) != 1 || !orderedChunks[^1].IsFinal)
-                throw new VoicePipelineException(
-                    "speech_synthesis_incomplete", "The speech provider returned incomplete audio.");
+            if (timing is not null)
+                RecordLatency(timing, "tts_request_started", synthesisStarted, synthesisStarted,
+                    speechSynthesizer.AdapterKey, "started", diagnosticResponseId);
+            Task mediaReady = transport!.WaitForMediaReadyAsync(existingOperation.Token).AsTask();
+            var stream = Channel.CreateBounded<SpeechSynthesisStreamUpdate>(new BoundedChannelOptions(4)
+            {
+                SingleReader = true,
+                SingleWriter = true,
+                FullMode = BoundedChannelFullMode.Wait,
+            });
+            using var synthesisSource = CancellationTokenSource.CreateLinkedTokenSource(existingOperation.Token);
+            synthesisSource.CancelAfter(options.SynthesisTimeout);
+            SpeechSynthesisResult? synthesis = null;
+            long firstAudioReceived = 0;
+            long synthesisCompleted = 0;
+            int finalChunks = 0;
+            Task producer = ProduceSpeechAsync();
+
             using Activity? sendActivity = PurpleGlassTelemetry.Calls.StartActivity("audio.send", ActivityKind.Producer);
             RealtimeAudioSendResult sendResult = RealtimeAudioSendResult.Pending;
-            foreach (SynthesizedAudioChunk chunk in orderedChunks)
+            bool mediaReadyObserved = false;
+            bool firstMediaObserved = false;
+            try
             {
-                existingOperation.Token.ThrowIfCancellationRequested();
-                lock (synchronization)
+                await foreach (SpeechSynthesisStreamUpdate update in stream.Reader.ReadAllAsync(existingOperation.Token))
                 {
-                    if (activeResponseGeneration != generation)
-                        throw new OperationCanceledException(existingOperation.Token);
+                    if (update.Completion is not null)
+                    {
+                        synthesis = update.Completion;
+                        continue;
+                    }
+                    SynthesizedAudioChunk chunk = update.AudioChunk
+                        ?? throw new VoicePipelineException("speech_synthesis_invalid", "The speech provider returned an invalid update.");
+                    existingOperation.Token.ThrowIfCancellationRequested();
+                    lock (synchronization)
+                    {
+                        if (activeResponseGeneration != generation)
+                            throw new OperationCanceledException(existingOperation.Token);
+                    }
+                    if (!mediaReadyObserved)
+                    {
+                        await mediaReady;
+                        mediaReadyObserved = true;
+                        diagnostics.RecordPlaybackEvent(new VoicePlaybackEventDiagnostic(
+                            identity.CallId, identity.CorrelationId, diagnosticResponseId,
+                            "media_ready", 0, 0, "provider_stream_started",
+                            ElapsedMs: timeProvider.GetElapsedTime(responseStarted).TotalMilliseconds));
+                    }
+                    sendResult = await transport!.SendAsync(chunk, existingOperation.Token);
+                    if (!string.IsNullOrWhiteSpace(sendResult.ResponseId))
+                    {
+                        lock (synchronization)
+                        {
+                            if (activeResponseGeneration == generation)
+                                activeResponseId = sendResult.ResponseId;
+                        }
+                    }
+                    if (!firstMediaObserved && sendResult.MediaMessageCount > 0)
+                    {
+                        firstMediaObserved = true;
+                        long firstMedia = timeProvider.GetTimestamp();
+                        double transportDelay = firstAudioReceived == 0 ? 0
+                            : timeProvider.GetElapsedTime(firstAudioReceived, firstMedia).TotalMilliseconds;
+                        PurpleGlassTelemetry.VoiceFirstAudioTransportDelay.Record(transportDelay,
+                            new KeyValuePair<string, object?>("provider", identity.Provider));
+                        if (timing is not null)
+                        {
+                            PurpleGlassTelemetry.VoiceEndpointToFirstMedia.Record(
+                                timeProvider.GetElapsedTime(timing.EndpointTimestamp, firstMedia).TotalMilliseconds,
+                                new KeyValuePair<string, object?>("provider", identity.Provider));
+                            RecordLatency(timing, "first_twilio_media_sent", firstAudioReceived, firstMedia,
+                                identity.Provider, "success", sendResult.ResponseId);
+                        }
+                    }
                 }
-                sendResult = await transport!.SendAsync(chunk, existingOperation.Token);
             }
+            catch (OperationCanceledException) when (!existingOperation.IsCancellationRequested
+                && synthesisSource.IsCancellationRequested)
+            {
+                await producer;
+                if (firstMediaObserved) await transport.ClearPlaybackAsync(existingOperation.Token);
+                throw new VoicePipelineException("speech_synthesis_timeout", "Speech synthesis timed out.");
+            }
+            catch
+            {
+                synthesisSource.Cancel();
+                await producer;
+                throw;
+            }
+            await producer;
+            if (synthesis is null)
+                throw new VoicePipelineException("speech_synthesis_incomplete", "The speech provider returned incomplete audio.");
+            if (synthesis.Failure is not null)
+            {
+                if (firstMediaObserved) await transport.ClearPlaybackAsync(existingOperation.Token);
+                throw new VoicePipelineException(synthesis.Failure.Code, synthesis.Failure.SafeMessage);
+            }
+            if (finalChunks != 1 || !sendResult.MarkSent)
+                throw new VoicePipelineException("speech_synthesis_incomplete", "The speech provider returned incomplete audio.");
             if (!sendResult.MarkSent || sendResult.MediaMessageCount == 0 || sendResult.MuLawBytes == 0)
                 throw new VoicePipelineException(
                     "speech_synthesis_output_missing", "Synthesized speech produced no provider media.");
@@ -674,6 +793,63 @@ public sealed class RealtimeVoiceSession(
                 ElapsedMs: timeProvider.GetElapsedTime(responseStarted).TotalMilliseconds,
                 ElapsedFromFirstMediaMs: playback.ElapsedFromFirstMediaMs,
                 ElapsedFromMarkSentMs: playback.ElapsedFromMarkSentMs));
+
+            async Task ProduceSpeechAsync()
+            {
+                try
+                {
+                    var request = new SpeechSynthesisRequest(
+                        RuntimeContext(Guid.NewGuid()), text, options.Conversation.Language,
+                        new VoiceConfiguration(options.Conversation.VoiceId,
+                            SpeakingRate: options.Conversation.SpeakingRate));
+                    await foreach (SpeechSynthesisStreamUpdate update in speechSynthesizer
+                        .SynthesizeStreamingAsync(request, synthesisSource.Token))
+                    {
+                        if (update.AudioChunk is not null)
+                        {
+                            if (update.AudioChunk.IsFinal) finalChunks++;
+                            if (update.AudioChunk.Audio.Length > 0 && firstAudioReceived == 0)
+                            {
+                                firstAudioReceived = timeProvider.GetTimestamp();
+                                double firstAudioMs = timeProvider.GetElapsedTime(
+                                    synthesisStarted, firstAudioReceived).TotalMilliseconds;
+                                PurpleGlassTelemetry.VoiceTtsFirstAudio.Record(firstAudioMs,
+                                    new KeyValuePair<string, object?>("adapter", speechSynthesizer.AdapterKey));
+                                diagnostics.RecordPlaybackEvent(new VoicePlaybackEventDiagnostic(
+                                    identity.CallId, identity.CorrelationId, diagnosticResponseId,
+                                    "tts_first_audio", 0, 0, "provider_delta",
+                                    ElapsedMs: timeProvider.GetElapsedTime(responseStarted).TotalMilliseconds));
+                                if (timing is not null)
+                                    RecordLatency(timing, "tts_first_audio", synthesisStarted, firstAudioReceived,
+                                        speechSynthesizer.AdapterKey, "success", diagnosticResponseId);
+                            }
+                        }
+                        if (update.Completion is not null)
+                        {
+                            synthesisCompleted = timeProvider.GetTimestamp();
+                            double durationMs = timeProvider.GetElapsedTime(
+                                synthesisStarted, synthesisCompleted).TotalMilliseconds;
+                            PurpleGlassTelemetry.SpeechSynthesisDuration.Record(durationMs,
+                                new KeyValuePair<string, object?>("adapter", speechSynthesizer.AdapterKey));
+                            diagnostics.RecordPlaybackEvent(new VoicePlaybackEventDiagnostic(
+                                identity.CallId, identity.CorrelationId, diagnosticResponseId,
+                                update.Completion.Failure is null ? "tts_completed" : "tts_failed",
+                                0, 0, update.Completion.Failure?.Code ?? "provider_completed",
+                                ElapsedMs: timeProvider.GetElapsedTime(responseStarted).TotalMilliseconds));
+                            if (timing is not null)
+                                RecordLatency(timing, "tts_completed", synthesisStarted, synthesisCompleted,
+                                    speechSynthesizer.AdapterKey,
+                                    update.Completion.Failure?.Code ?? "success", diagnosticResponseId);
+                        }
+                        await stream.Writer.WriteAsync(update, synthesisSource.Token);
+                    }
+                    stream.Writer.TryComplete();
+                }
+                catch (Exception exception)
+                {
+                    stream.Writer.TryComplete(exception);
+                }
+            }
         }
         catch (OperationCanceledException)
         {
@@ -872,6 +1048,32 @@ public sealed class RealtimeVoiceSession(
         identity!.TenantId, identity.LocationId, identity.CallId, conversationId!.Value,
         identity.CorrelationId, causationId, Activity.Current?.TraceId.ToString());
 
+    private void RecordLatency(
+        TurnLatency timing,
+        string stage,
+        long startedTimestamp,
+        long completedTimestamp,
+        string adapter,
+        string result,
+        string responseId = "none")
+    {
+        double durationMs = startedTimestamp == 0 || completedTimestamp == 0
+            ? 0 : timeProvider.GetElapsedTime(startedTimestamp, completedTimestamp).TotalMilliseconds;
+        double elapsedFromEndpointMs = completedTimestamp == 0
+            ? 0 : timeProvider.GetElapsedTime(timing.EndpointTimestamp, completedTimestamp).TotalMilliseconds;
+        diagnostics.RecordLatency(new VoiceLatencyDiagnostic(
+            identity!.CallId,
+            conversationId,
+            identity.CorrelationId,
+            timing.TurnId.ToString("N"),
+            responseId,
+            stage,
+            Math.Max(0, durationMs),
+            Math.Max(0, elapsedFromEndpointMs),
+            SafeCode(adapter),
+            SafeCode(result)));
+    }
+
     private void RecordFailure(string code)
     {
         PurpleGlassTelemetry.VoiceFailures.Add(1,
@@ -909,6 +1111,8 @@ public sealed class RealtimeVoiceSession(
             .Take(80).ToArray());
         return string.IsNullOrWhiteSpace(normalized) ? "voice_session_ended" : normalized;
     }
+
+    private sealed record TurnLatency(Guid TurnId, long EndpointTimestamp);
 
     private static Guid DeterministicId(Guid namespaceId, string value)
     {
