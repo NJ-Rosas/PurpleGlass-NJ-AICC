@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using PurpleGlass.Adapters.Telephony.Twilio;
 using PurpleGlass.Adapters.Speech.Mock;
+using PurpleGlass.Adapters.Speech.OpenAI;
 using PurpleGlass.Modules.Conversation.Application;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -266,6 +267,64 @@ public sealed class TwilioRealtimeAudioTests
 
         Assert.Equal("deterministic",
             provider.GetRequiredService<IAiConversationRuntime>().AdapterKey);
+    }
+
+    [Fact]
+    public void ProductionOpenAiRegistrationResolvesTypedSpeechAndRealtimeSessionGraph()
+    {
+        using ServiceProvider provider = BuildVoiceProvider(new Dictionary<string, string?>
+        {
+            ["Providers:EnableRealAI"] = "true",
+            ["Providers:EnableRealSpeech"] = "true",
+            ["SpeechToText:Provider"] = "OpenAI",
+            ["LanguageModel:Provider"] = "OpenAI",
+            ["TextToSpeech:Provider"] = "OpenAI",
+            ["OpenAI:ApiKey"] = "synthetic-test-key",
+            ["OpenAI:BaseUrl"] = "https://api.openai.com/v1/",
+            ["OpenAI:TranscriptionModel"] = "gpt-4o-mini-transcribe",
+            ["OpenAI:LanguageModel"] = "gpt-4.1-mini",
+            ["OpenAI:SpeechModel"] = "gpt-4o-mini-tts",
+        });
+
+        OpenAiSpeechSynthesizer typedClient =
+            provider.GetRequiredService<OpenAiSpeechSynthesizer>();
+        Assert.Equal("openai", typedClient.AdapterKey);
+        Assert.IsType<OpenAiSpeechSynthesizer>(
+            provider.GetRequiredService<ISpeechSynthesizer>());
+        Assert.IsType<OpenAiSpeechRecognizer>(
+            provider.GetRequiredService<ISpeechRecognizer>());
+        Assert.NotNull(provider.GetRequiredService<IHttpClientFactory>());
+
+        using IServiceScope scope = provider.CreateScope();
+        Assert.NotNull(scope.ServiceProvider.GetRequiredService<RealtimeVoiceSession>());
+    }
+
+    [Theory]
+    [InlineData("Fake", "Fake", "Fake", "mock-speech", "deterministic")]
+    [InlineData("Disabled", "Disabled", "Disabled", "disabled", "disabled")]
+    public void NonProductionProviderRegistrationsResolveRealtimeSessionGraph(
+        string speechToText,
+        string languageModel,
+        string textToSpeech,
+        string expectedSpeechAdapter,
+        string expectedAiAdapter)
+    {
+        using ServiceProvider provider = BuildVoiceProvider(new Dictionary<string, string?>
+        {
+            ["SpeechToText:Provider"] = speechToText,
+            ["LanguageModel:Provider"] = languageModel,
+            ["TextToSpeech:Provider"] = textToSpeech,
+        });
+
+        Assert.Equal(expectedSpeechAdapter,
+            provider.GetRequiredService<ISpeechRecognizer>().AdapterKey);
+        Assert.Equal(expectedSpeechAdapter,
+            provider.GetRequiredService<ISpeechSynthesizer>().AdapterKey);
+        Assert.Equal(expectedAiAdapter,
+            provider.GetRequiredService<IAiConversationRuntime>().AdapterKey);
+
+        using IServiceScope scope = provider.CreateScope();
+        Assert.NotNull(scope.ServiceProvider.GetRequiredService<RealtimeVoiceSession>());
     }
 
     [Fact]
@@ -577,6 +636,23 @@ public sealed class TwilioRealtimeAudioTests
         services.AddRealtimeVoice(builder.Build());
         using ServiceProvider provider = services.BuildServiceProvider();
         return provider.GetRequiredService<TwilioRealtimeAudioOptions>();
+    }
+
+    private static ServiceProvider BuildVoiceProvider(Dictionary<string, string?> overrides)
+    {
+        IConfiguration configuration = BaseVoiceConfiguration()
+            .AddInMemoryCollection(overrides)
+            .Build();
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton(TimeProvider.System);
+        services.AddSingleton<RealtimeEventHub>();
+        services.AddRealtimeVoice(configuration);
+        return services.BuildServiceProvider(new ServiceProviderOptions
+        {
+            ValidateOnBuild = true,
+            ValidateScopes = true,
+        });
     }
 
     private static IConfigurationBuilder BaseVoiceConfiguration() => new ConfigurationBuilder()

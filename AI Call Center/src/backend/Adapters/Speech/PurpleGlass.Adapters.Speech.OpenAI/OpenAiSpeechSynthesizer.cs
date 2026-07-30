@@ -25,19 +25,14 @@ public sealed class OpenAiSpeechSynthesizer : ISpeechSynthesizer
     private readonly OpenAiSpeechOptions options;
     private readonly IOpenAiSpeechStreamingGateway? streamingGateway;
 
-    public OpenAiSpeechSynthesizer(HttpClient httpClient, OpenAiSpeechOptions options)
-    {
-        this.httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
-        this.options = (options ?? throw new ArgumentNullException(nameof(options))).Validate();
-    }
-
     public OpenAiSpeechSynthesizer(
         HttpClient httpClient,
         OpenAiSpeechOptions options,
-        IOpenAiSpeechStreamingGateway streamingGateway)
-        : this(httpClient, options)
+        IOpenAiSpeechStreamingGateway? streamingGateway = null)
     {
-        this.streamingGateway = streamingGateway ?? throw new ArgumentNullException(nameof(streamingGateway));
+        this.httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
+        this.options = (options ?? throw new ArgumentNullException(nameof(options))).Validate();
+        this.streamingGateway = streamingGateway;
     }
 
     public string AdapterKey => "openai";
