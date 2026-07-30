@@ -16,8 +16,9 @@ public sealed class RenderBlueprintTests
         Assert.Equal("true", web.Value("Providers__EnableRealSpeech"));
         Assert.Equal("OpenAI", web.Value("SpeechToText__Provider"));
         Assert.Equal("OpenAI", web.Value("TextToSpeech__Provider"));
-        Assert.Equal("false", web.Value("Providers__EnableRealAI"));
-        Assert.Equal("Deterministic", web.Value("LanguageModel__Provider"));
+        Assert.Equal("true", web.Value("Providers__EnableRealAI"));
+        Assert.Equal("OpenAI", web.Value("LanguageModel__Provider"));
+        Assert.Equal("gpt-4o-mini", web.Value("OpenAI__LanguageModel"));
 
         BlueprintService worker = services["purpleglass-integrations-worker"];
         Assert.Equal("true", worker.Value("Providers__EnableRealTelephony"));

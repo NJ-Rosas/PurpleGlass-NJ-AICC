@@ -41,7 +41,7 @@ services:
       - key: Providers__EnableRealTelephony
         value: true
       - key: Providers__EnableRealAI
-        value: false
+        value: true
       - key: Providers__EnableRealSpeech
         value: true
       - key: SpeechToText__Provider
@@ -49,7 +49,7 @@ services:
       - key: TextToSpeech__Provider
         value: OpenAI
       - key: LanguageModel__Provider
-        value: Deterministic
+        value: OpenAI
       - key: Integrations__EnableOpenDental
         value: false
       - key: DataProtection__AllowSensitiveData
@@ -60,6 +60,8 @@ services:
         value: https://purpleglass-web.onrender.com
       - key: OpenAI__ApiKey
         sync: false
+      - key: OpenAI__LanguageModel
+        value: gpt-4o-mini
       - key: Telephony__Twilio__AccountSid
         sync: false
       - key: Telephony__Twilio__AuthToken
