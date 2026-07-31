@@ -18,6 +18,59 @@ public sealed class StreamingPcm16ResamplerTests
     }
 
     [Fact]
+    public void EveryByteAndDeterministicallyRandomBoundariesMatchContiguousConversionExactly()
+    {
+        byte[] input = CompositeSignal();
+        byte[] contiguous = Convert(input, input.Length);
+        byte[] everyByte = Convert(input, 1);
+        var random = new Random(16_012);
+        int[] randomized = Enumerable.Range(0, 257).Select(_ => random.Next(1, 2_049)).ToArray();
+        byte[] randomChunks = Convert(input, randomized);
+
+        Assert.Equal(contiguous, everyByte);
+        Assert.Equal(contiguous, randomChunks);
+    }
+
+    [Theory]
+    [InlineData(2)]
+    [InlineData(4)]
+    [InlineData(30)]
+    [InlineData(31)]
+    public void TinyPrefixBelowFilterSupportIsEmittedOnceAfterEnoughLookahead(int firstChunkBytes)
+    {
+        byte[] input = CompositeSignal();
+        byte[] contiguous = Convert(input, input.Length);
+        byte[] chunked = Convert(input, firstChunkBytes, 1, 2, 3, 5, 8, 13, 8_192);
+
+        Assert.Equal(contiguous, chunked);
+        Assert.Equal(contiguous.AsSpan(0, 160).ToArray(), chunked.AsSpan(0, 160).ToArray());
+    }
+
+    [Fact]
+    public void DiagnosticsAccountForInputCarryHistoryOutputOffsetsAndFinalFlush()
+    {
+        byte[] input = CompositeSignal();
+        var resampler = new StreamingPcm16Resampler(24_000, 8_000);
+        var output = new List<byte>();
+        output.AddRange(resampler.Convert(input.AsSpan(0, 1), isFinal: false));
+        Assert.Equal(1, resampler.Diagnostics.CarryByteCount);
+        output.AddRange(resampler.Convert(input.AsSpan(1, 47), isFinal: false));
+        output.AddRange(resampler.Convert(input.AsSpan(48), isFinal: true));
+        StreamingPcm16ResamplerDiagnostics diagnostic = resampler.Diagnostics;
+
+        Assert.Equal(input.Length, diagnostic.InputByteCount);
+        Assert.Equal(input.Length / 2, diagnostic.InputSampleCount);
+        Assert.Equal(3, diagnostic.ChunkCount);
+        Assert.Equal(output.Count / 2, diagnostic.OutputSampleCount);
+        Assert.Equal(0, diagnostic.FirstOutputOffset);
+        Assert.Equal(diagnostic.OutputSampleCount - 1, diagnostic.LastOutputOffset);
+        Assert.Equal(0, diagnostic.CarryByteCount);
+        Assert.Equal(diagnostic.InputSampleCount, diagnostic.HistorySampleCount);
+        Assert.True(diagnostic.FlushOutputSampleCount > 0);
+        Assert.True(diagnostic.Completed);
+    }
+
+    [Fact]
     public void IndependentResponsesDoNotShareFilterState()
     {
         byte[] first = SinePcm(1_000, 0.08, 14_000);

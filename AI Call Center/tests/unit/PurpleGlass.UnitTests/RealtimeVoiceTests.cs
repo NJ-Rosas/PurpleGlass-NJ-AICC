@@ -95,6 +95,10 @@ public sealed class RealtimeVoiceTests
         Assert.NotNull(endpoint.FinalizedUtterance);
         Assert.Equal(1, endpoint.FinalizedUtterance.FirstSequence);
         Assert.Equal(3, endpoint.FinalizedUtterance.LastSequence);
+        Assert.Equal(now, endpoint.FinalizedUtterance.LastSpeechAtUtc);
+        Assert.Equal(now.AddMilliseconds(40), endpoint.FinalizedUtterance.EndedAtUtc);
+        Assert.Equal(TimeSpan.FromMilliseconds(40),
+            endpoint.FinalizedUtterance.EndedAtUtc - endpoint.FinalizedUtterance.LastSpeechAtUtc);
         Assert.False(detector.IsSpeechActive);
     }
 

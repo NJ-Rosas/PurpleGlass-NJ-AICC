@@ -22,6 +22,7 @@ public sealed class RealtimeTurnDetector(RealtimeVoiceOptions options) : IDispos
     private DateTimeOffset startedAtUtc;
     private DateTimeOffset lastFrameAtUtc;
     private DateTimeOffset candidateStartedAtUtc;
+    private DateTimeOffset lastSpeechAtUtc;
     private TimeSpan trailingSilence;
     private TimeSpan utteranceDuration;
     private TimeSpan qualifiedSpeechDuration;
@@ -215,6 +216,7 @@ public sealed class RealtimeTurnDetector(RealtimeVoiceOptions options) : IDispos
 
     private void ActivateCandidate()
     {
+        DateTimeOffset candidateLastFrameAtUtc = lastFrameAtUtc;
         ResetBuffer();
         speechActive = true;
         format = candidateFormat;
@@ -226,8 +228,10 @@ public sealed class RealtimeTurnDetector(RealtimeVoiceOptions options) : IDispos
         utteranceEnergyTotal = candidateEnergyTotal;
         candidate.Position = 0;
         candidate.CopyTo(buffer);
+        lastFrameAtUtc = candidateLastFrameAtUtc;
         silenceDuration = TimeSpan.Zero;
         trailingSilence = TimeSpan.Zero;
+        lastSpeechAtUtc = candidateLastFrameAtUtc;
         ResetCandidate();
     }
 
@@ -242,7 +246,11 @@ public sealed class RealtimeTurnDetector(RealtimeVoiceOptions options) : IDispos
         utteranceDuration += duration;
         inboundFrames++;
         utteranceEnergyTotal += metrics.Energy;
-        if (containsSpeech && metrics.SpeechLike) qualifiedSpeechDuration += duration;
+        if (containsSpeech)
+        {
+            lastSpeechAtUtc = frame.ReceivedAtUtc;
+            if (metrics.SpeechLike) qualifiedSpeechDuration += duration;
+        }
         trailingSilence = containsSpeech ? TimeSpan.Zero : trailingSilence + duration;
     }
 
@@ -256,7 +264,8 @@ public sealed class RealtimeTurnDetector(RealtimeVoiceOptions options) : IDispos
             turnId, firstSequence, lastSequence, finalizedFormat, audio,
             startedAtUtc, lastFrameAtUtc == default ? startedAtUtc : lastFrameAtUtc,
             inboundFrames, utteranceDuration, qualifiedSpeechDuration,
-            noiseFloor, utteranceEnergyTotal / Math.Max(1, inboundFrames));
+            noiseFloor, utteranceEnergyTotal / Math.Max(1, inboundFrames),
+            lastSpeechAtUtc == default ? lastFrameAtUtc : lastSpeechAtUtc);
         ResetBuffer();
         speechActive = false;
         return utterance;
@@ -290,6 +299,7 @@ public sealed class RealtimeTurnDetector(RealtimeVoiceOptions options) : IDispos
         format = null;
         firstSequence = 0;
         startedAtUtc = default;
+        lastSpeechAtUtc = default;
         lastFrameAtUtc = default;
         trailingSilence = TimeSpan.Zero;
         utteranceDuration = TimeSpan.Zero;

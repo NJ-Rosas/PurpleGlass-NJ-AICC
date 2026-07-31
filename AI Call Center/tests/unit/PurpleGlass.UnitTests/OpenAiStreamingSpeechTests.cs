@@ -58,6 +58,27 @@ public sealed class OpenAiStreamingSpeechTests
         _ = Assert.Single(updates, x => x.Completion is not null);
     }
 
+    [Fact]
+    public async Task ProviderBufferReuseCannotMutateAnEmittedAudioChunk()
+    {
+        var gateway = new ChannelGateway();
+        var synthesizer = Create(gateway);
+        byte[] reusable = [1, 2, 3, 4];
+        await using IAsyncEnumerator<SpeechSynthesisStreamUpdate> stream =
+            synthesizer.SynthesizeStreamingAsync(Request(), default).GetAsyncEnumerator();
+        Task<bool> move = stream.MoveNextAsync().AsTask();
+        gateway.Write(new OpenAiSpeechStreamUpdate(reusable, Completed: false));
+        Assert.True(await move.WaitAsync(TimeSpan.FromSeconds(2)));
+        ReadOnlyMemory<byte> emitted = stream.Current.AudioChunk!.Audio;
+
+        reusable.AsSpan().Fill(0x7f);
+
+        Assert.Equal(new byte[] { 1, 2, 3, 4 }, emitted.ToArray());
+        gateway.Write(new OpenAiSpeechStreamUpdate(ReadOnlyMemory<byte>.Empty, Completed: true));
+        gateway.Complete();
+        _ = await ReadRemainingAsync(stream);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

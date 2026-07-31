@@ -66,7 +66,12 @@ public sealed record RealtimeAudioSendResult(
     int MuLawBytes,
     int MediaMessageCount,
     bool MarkSent,
-    double MaximumBufferedAudioDurationMs)
+    double MaximumBufferedAudioDurationMs,
+    double PacketDurationMs = 0,
+    double StartupBufferedAudioDurationMs = 0,
+    int UnderflowCount = 0,
+    double AveragePacingLatenessMs = 0,
+    double MaximumPacingLatenessMs = 0)
 {
     public static RealtimeAudioSendResult Pending { get; } = new(string.Empty, 0, 0, 0, 0, 0, false, 0);
 }
@@ -101,4 +106,5 @@ public sealed record FinalizedVoiceUtterance(
     TimeSpan? Duration = null,
     TimeSpan? QualifiedSpeechDuration = null,
     double NoiseFloor = 0,
-    double EnergyMetric = 0);
+    double EnergyMetric = 0,
+    DateTimeOffset? LastSpeechAtUtc = null);

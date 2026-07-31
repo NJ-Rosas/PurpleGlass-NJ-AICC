@@ -87,7 +87,12 @@ public sealed record VoicePlaybackEventDiagnostic(
     string SafeReason,
     double ElapsedMs = 0,
     double ElapsedFromFirstMediaMs = 0,
-    double ElapsedFromMarkSentMs = 0);
+    double ElapsedFromMarkSentMs = 0,
+    double PacketDurationMs = 0,
+    double StartupBufferedAudioDurationMs = 0,
+    int UnderflowCount = 0,
+    double AveragePacingLatenessMs = 0,
+    double MaximumPacingLatenessMs = 0);
 
 public sealed record VoiceLatencyDiagnostic(
     Guid CallId,

@@ -20,12 +20,20 @@ public sealed class TwilioRealtimeAudioOptions
 
     public int MaxOutboundMediaBytes { get; init; } = 8 * 1024;
 
-    public TimeSpan OutboundPacketDuration { get; init; } = TimeSpan.FromMilliseconds(100);
+    public TimeSpan OutboundPacketDuration { get; init; } = TimeSpan.FromMilliseconds(20);
+
+    public TimeSpan OutboundStartupBufferDuration { get; init; } = TimeSpan.FromMilliseconds(100);
+
+    public TimeSpan MaximumPacingLateness { get; init; } = TimeSpan.FromMilliseconds(40);
 
     public bool EnableOutboundPacing { get; init; } = true;
 
     public int OutboundPacketBytes => checked((int)Math.Round(
         TwilioRealtimeAudioProtocol.TelephonySampleRate * OutboundPacketDuration.TotalSeconds,
+        MidpointRounding.AwayFromZero));
+
+    public int OutboundStartupBufferBytes => checked((int)Math.Round(
+        TwilioRealtimeAudioProtocol.TelephonySampleRate * OutboundStartupBufferDuration.TotalSeconds,
         MidpointRounding.AwayFromZero));
 
     public TwilioRealtimeAudioOptions Validate()
@@ -49,6 +57,15 @@ public sealed class TwilioRealtimeAudioOptions
         if (OutboundPacketDuration < TimeSpan.FromMilliseconds(20)
             || OutboundPacketDuration > TimeSpan.FromMilliseconds(250))
             throw new InvalidOperationException("Twilio outbound packet duration must be between 20 and 250 milliseconds.");
+        if (OutboundStartupBufferDuration < OutboundPacketDuration
+            || OutboundStartupBufferDuration > TimeSpan.FromMilliseconds(250)
+            || OutboundStartupBufferDuration.Ticks % OutboundPacketDuration.Ticks != 0)
+            throw new InvalidOperationException(
+                "Twilio outbound startup buffer must be an exact packet multiple between one packet and 250 milliseconds.");
+        if (MaximumPacingLateness < TimeSpan.Zero
+            || MaximumPacingLateness > OutboundStartupBufferDuration)
+            throw new InvalidOperationException(
+                "Twilio maximum pacing lateness must be between zero and the startup buffer duration.");
         int pacedMediaBytes = OutboundPacketBytes;
         if (pacedMediaBytes < 80 || pacedMediaBytes > MaxOutboundMediaBytes)
             throw new InvalidOperationException("Twilio paced media must fit the outbound media bound.");

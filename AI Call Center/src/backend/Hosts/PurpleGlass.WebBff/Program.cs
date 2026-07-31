@@ -192,15 +192,17 @@ string applicationVersion = Assembly.GetExecutingAssembly()
     .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
     ?? Assembly.GetExecutingAssembly().GetName().Version?.ToString()
     ?? "unknown";
-Action<ILogger, string, double, int, int, bool, string, Exception?> logVoiceTransportConfigured =
-    LoggerMessage.Define<string, double, int, int, bool, string>(
+Action<ILogger, string, double, int, double, int, bool, Exception?> logVoiceTransportConfigured =
+    LoggerMessage.Define<string, double, int, double, int, bool>(
         LogLevel.Information,
         new EventId(208, "RealtimeVoiceTransportConfigured"),
-        "Realtime voice transport configured; ApplicationVersion={ApplicationVersion}, OutboundPacketDurationMs={OutboundPacketDurationMs}, OutboundPacketBytes={OutboundPacketBytes}, MaxOutboundMediaBytes={MaxOutboundMediaBytes}, PacingEnabled={PacingEnabled}, PacingMode={PacingMode}.");
+        "Realtime voice transport configured; ApplicationVersion={ApplicationVersion}, OutboundPacketDurationMs={OutboundPacketDurationMs}, OutboundPacketBytes={OutboundPacketBytes}, StartupBufferDurationMs={StartupBufferDurationMs}, MaxOutboundMediaBytes={MaxOutboundMediaBytes}, PacingEnabled={PacingEnabled}, PacingMode=monotonic_bounded_jitter_buffer.");
 logVoiceTransportConfigured(
     app.Logger, applicationVersion, startupTransportOptions.OutboundPacketDuration.TotalMilliseconds,
-    startupTransportOptions.OutboundPacketBytes, startupTransportOptions.MaxOutboundMediaBytes,
-    startupTransportOptions.EnableOutboundPacing, "monotonic_bounded_send_ahead", null);
+    startupTransportOptions.OutboundPacketBytes,
+    startupTransportOptions.OutboundStartupBufferDuration.TotalMilliseconds,
+    startupTransportOptions.MaxOutboundMediaBytes, startupTransportOptions.EnableOutboundPacing,
+    null);
 if (!app.Environment.IsDevelopment()) { app.UseHsts(); app.UseHttpsRedirection(); }
 app.UseExceptionHandler();
 app.UseMiddleware<SecurityHeadersMiddleware>();

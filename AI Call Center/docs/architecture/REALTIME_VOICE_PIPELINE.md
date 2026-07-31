@@ -65,7 +65,7 @@ PurpleGlass:     8 kHz mono PCM16
 
 TTS adapter:     streamed PCM16 deltas (OpenAI returns 24 kHz mono)
     -> stateful band-limited resample to 8 kHz
-    -> mu-law encode/base64 in bounded 100 ms packets
+    -> mu-law encode/base64 in bounded 20 ms packets
 Twilio outbound media
 ```
 
@@ -77,11 +77,21 @@ Before Task 16.1, the OpenAI speech adapter materialized the complete PCM respon
 
 The OpenAI adapter now consumes the installed official SDK's streaming speech API and emits each valid raw-PCM audio delta through the provider-neutral `ISpeechSynthesizer` stream. A bounded four-update channel decouples provider receipt from paced carrier delivery without allowing unbounded send-ahead. The finalized assistant text remains one durable Assistant turn; audio deltas are never persisted as conversation content.
 
-Each response owns one `StreamingPcm16Resampler`. It carries a split PCM16 byte across provider deltas, retains filter lookahead/history across arbitrary chunk boundaries, performs the existing windowed-sinc low-pass conversion from 24 kHz to 8 kHz, and flushes the mathematically rounded final sample count exactly once. It adds no capacity padding, duplicate tail, synthetic silence, or per-delta filter reset. The resulting μ-law bytes accumulate only until one configured carrier packet (100 ms/800 bytes by default) is available, then enter the monotonic pacing schedule immediately. A provider response mark is sent only after the final resampler flush and final media packet.
+Each response owns one `StreamingPcm16Resampler`. It carries a split PCM16 byte across provider deltas, retains filter lookahead/history across arbitrary chunk boundaries, performs the existing windowed-sinc low-pass conversion from 24 kHz to 8 kHz, and flushes the mathematically rounded final sample count exactly once. It adds no capacity padding, duplicate tail, synthetic silence, or per-delta filter reset. The resulting μ-law bytes accumulate to a bounded 100 ms startup reserve and are framed as five 20 ms/160-byte carrier packets. Those initial packets establish bounded Twilio send-ahead; later packets follow monotonic absolute deadlines. A provider response mark is sent only after the final resampler flush and final media packet.
 
 Work required before the first carrier media packet is now: finalized assistant response persistence, OpenAI TTS request startup, receipt of enough PCM for the resampler's bounded lookahead, conversion/μ-law encoding, and confirmation of media readiness. Remaining TTS deltas, final conversion, later paced media packets, the response mark, and mark acknowledgement happen after the first media packet. This structural change removes full-TTS and full-resample buffering from the critical path; it does not claim a measured production improvement until a controlled later deployment validates it.
 
 The authenticated Twilio `connected` and `start` messages establish the current stream SID before the session is created. `IRealtimeAudioTransport.WaitForMediaReadyAsync` makes that boundary explicit to the session. Greeting synthesis may run concurrently, but its bounded updates are held until that signal completes; playback is released once through the same response path used by later turns. Session cancellation, provider disconnect, or startup timeout cancels that wait and the TTS stream without regenerating or duplicating the greeting. No synchronization sleep is used.
+
+### Task 16.1.2 playback quality hardening
+
+The controlled Task 16.2 call proved streaming, greeting readiness, and barge-in, but a human heard a recurring cut/restart at response beginnings and intermittent jitter. No production audio was retained, so the precise audible waveform cannot be reproduced or attributed conclusively. Deterministic stage-by-stage tests do prove that owned OpenAI PCM deltas, PCM16 carry reconstruction, stateful resampling, μ-law conversion, and packet extraction preserve one contiguous byte sequence with no duplicate prefix or tail. The resampler exposes numeric-only diagnostics for input bytes/samples, chunk count, carry, history, output offsets, and final-flush output; it never records sample values.
+
+The first software discontinuity found was transport scheduling. The previous 100 ms packet was sent on a zero-margin playback cadence. If a provider delta or scheduler continuation arrived after its old absolute deadline, buffered packets could all qualify immediately and be sent in a catch-up burst; a longer producer gap could exhaust Twilio's ordered playback buffer. The corrected transport keeps the same explicit 100 ms startup reserve but frames it as five 20 ms packets. It then paces from monotonic deadlines, rebases the next deadline after more than 40 ms lateness, and never drains several overdue packets merely to catch up. If the estimated Twilio reserve is exhausted, the generation records one underflow and accumulates a new bounded 100 ms reserve before resuming. A final response shorter than the threshold is still flushed completely.
+
+The quality buffer adds no designed startup delay relative to the prior 100 ms first-packet threshold: both require 100 ms of converted audio before normal non-final playback. It increases initial WebSocket framing from one message to five and improves pacing, cancellation, and `clear` granularity from 100 ms to 20 ms. Streaming remains response-incremental; the whole TTS response is never buffered. Cancellation and `clear` dispose the response-scoped resampler and all pending μ-law bytes, and the next generation creates independent pacing state. Safe response-level telemetry reports packet duration, startup/max buffered duration, packet count, underflow count, and average/maximum pacing lateness without packet payloads or per-packet log volume.
+
+Endpoint telemetry now measures `last speech-bearing inbound frame -> endpoint detected` explicitly. VAD and trailing-silence thresholds are unchanged: the production-proven natural-pause behavior is preserved. STT, LLM, and TTS provider choices are also unchanged. The local hardening is not evidence that the human-audible defects are fixed; that requires one controlled production revalidation from the exact candidate SHA.
 
 ## Turn detection and backpressure
 

@@ -167,7 +167,10 @@ public sealed partial class BffVoiceSessionDiagnostics(ILogger<BffVoiceSessionDi
         LogPlaybackEvent(logger, diagnostic.CallId, diagnostic.CorrelationId,
             diagnostic.ResponseId, diagnostic.Event, diagnostic.MediaMessagesSent,
             diagnostic.BufferedAudioDurationMs, diagnostic.SafeReason, diagnostic.ElapsedMs,
-            diagnostic.ElapsedFromFirstMediaMs, diagnostic.ElapsedFromMarkSentMs);
+            diagnostic.ElapsedFromFirstMediaMs, diagnostic.ElapsedFromMarkSentMs,
+            diagnostic.PacketDurationMs, diagnostic.StartupBufferedAudioDurationMs,
+            diagnostic.UnderflowCount, diagnostic.AveragePacingLatenessMs,
+            diagnostic.MaximumPacingLatenessMs);
 
     public void RecordLatency(VoiceLatencyDiagnostic diagnostic) =>
         LogLatency(logger, diagnostic.CallId, diagnostic.ConversationId,
@@ -202,11 +205,13 @@ public sealed partial class BffVoiceSessionDiagnostics(ILogger<BffVoiceSessionDi
         int muLawBytes, int mediaMessageCount, bool markSent, bool cleared, bool canceled);
 
     [LoggerMessage(207, LogLevel.Information,
-        "Realtime playback event; CallId={CallId}, CorrelationId={CorrelationId}, ResponseId={ResponseId}, Event={Event}, MediaMessagesSent={MediaMessagesSent}, BufferedAudioDurationMs={BufferedAudioDurationMs}, SafeReason={SafeReason}, ElapsedMs={ElapsedMs}, ElapsedFromFirstMediaMs={ElapsedFromFirstMediaMs}, ElapsedFromMarkSentMs={ElapsedFromMarkSentMs}.")]
+        "Realtime playback event; CallId={CallId}, CorrelationId={CorrelationId}, ResponseId={ResponseId}, Event={Event}, MediaMessagesSent={MediaMessagesSent}, BufferedAudioDurationMs={BufferedAudioDurationMs}, SafeReason={SafeReason}, ElapsedMs={ElapsedMs}, ElapsedFromFirstMediaMs={ElapsedFromFirstMediaMs}, ElapsedFromMarkSentMs={ElapsedFromMarkSentMs}, PacketDurationMs={PacketDurationMs}, StartupBufferedAudioDurationMs={StartupBufferedAudioDurationMs}, UnderflowCount={UnderflowCount}, AveragePacingLatenessMs={AveragePacingLatenessMs}, MaximumPacingLatenessMs={MaximumPacingLatenessMs}.")]
     private static partial void LogPlaybackEvent(ILogger logger, Guid callId, Guid correlationId,
         string responseId, string @event, int mediaMessagesSent,
         double bufferedAudioDurationMs, string safeReason, double elapsedMs,
-        double elapsedFromFirstMediaMs, double elapsedFromMarkSentMs);
+        double elapsedFromFirstMediaMs, double elapsedFromMarkSentMs,
+        double packetDurationMs, double startupBufferedAudioDurationMs,
+        int underflowCount, double averagePacingLatenessMs, double maximumPacingLatenessMs);
 
     [LoggerMessage(210, LogLevel.Information,
         "Realtime voice latency; CallId={CallId}, ConversationId={ConversationId}, CorrelationId={CorrelationId}, TurnId={TurnId}, ResponseId={ResponseId}, Stage={Stage}, DurationMs={DurationMs}, ElapsedFromEndpointMs={ElapsedFromEndpointMs}, Adapter={Adapter}, Result={Result}.")]

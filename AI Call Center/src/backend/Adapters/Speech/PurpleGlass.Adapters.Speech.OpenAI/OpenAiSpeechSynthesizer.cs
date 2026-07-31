@@ -103,17 +103,19 @@ public sealed class OpenAiSpeechSynthesizer : ISpeechSynthesizer
                 continue;
             }
             if (update.Audio.Length == 0) continue;
-            totalBytes = checked(totalBytes + update.Audio.Length);
+            byte[] ownedAudio = update.Audio.ToArray();
+            totalBytes = checked(totalBytes + ownedAudio.Length);
             if (totalBytes > options.MaximumSpeechResponseBytes)
             {
+                CryptographicOperations.ZeroMemory(ownedAudio);
                 streamFailure = new RuntimeFailure(
                     "speech_synthesis_response_too_large", "Speech synthesis exceeded the safe audio size.", false);
                 break;
             }
-            foreach (byte value in update.Audio.Span[..Math.Min(update.Audio.Length, 4 - prefix.Count)])
+            foreach (byte value in ownedAudio.AsSpan(0, Math.Min(ownedAudio.Length, 4 - prefix.Count)))
                 prefix.Add(value);
             yield return SpeechSynthesisStreamUpdate.Audio(new SynthesizedAudioChunk(
-                sequence++, AudioFormat.Pcm16(OutputSampleRate, OutputChannels), update.Audio, IsFinal: false));
+                sequence++, AudioFormat.Pcm16(OutputSampleRate, OutputChannels), ownedAudio, IsFinal: false));
         }
 
         if (streamFailure is null && (!providerCompleted || totalBytes == 0 || (totalBytes & 1) != 0

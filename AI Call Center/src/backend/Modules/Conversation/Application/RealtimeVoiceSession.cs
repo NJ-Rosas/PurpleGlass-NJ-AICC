@@ -323,9 +323,23 @@ public sealed class RealtimeVoiceSession(
                 {
                     long endpointTimestamp = timeProvider.GetTimestamp();
                     endpointTimestamps[result.FinalizedUtterance.TurnId] = endpointTimestamp;
+                    double endpointDetectionMs = Math.Max(0,
+                        (timeProvider.GetUtcNow() - (result.FinalizedUtterance.LastSpeechAtUtc
+                            ?? result.FinalizedUtterance.EndedAtUtc)).TotalMilliseconds);
                     PurpleGlassTelemetry.VoiceEndpointLatency.Record(
-                        (result.FinalizedUtterance.Duration ?? TimeSpan.Zero).TotalMilliseconds,
+                        endpointDetectionMs,
                         new KeyValuePair<string, object?>("provider", identity!.Provider));
+                    diagnostics.RecordLatency(new VoiceLatencyDiagnostic(
+                        identity.CallId,
+                        ConversationId: null,
+                        identity.CorrelationId,
+                        result.FinalizedUtterance.TurnId.ToString("N"),
+                        ResponseId: "none",
+                        Stage: "final_speech_to_endpoint",
+                        DurationMs: endpointDetectionMs,
+                        ElapsedFromEndpointMs: 0,
+                        Adapter: identity.Provider,
+                        Result: "success"));
                     diagnostics.RecordInboundTurn(new VoiceInboundTurnDiagnostic(
                         identity!.CallId,
                         identity.CorrelationId,
@@ -778,6 +792,15 @@ public sealed class RealtimeVoiceSession(
                 "playback_mark_sent", sendResult.MediaMessageCount,
                 sendResult.MaximumBufferedAudioDurationMs, "local_media_complete",
                 ElapsedMs: timeProvider.GetElapsedTime(responseStarted).TotalMilliseconds));
+            diagnostics.RecordPlaybackEvent(new VoicePlaybackEventDiagnostic(
+                identity.CallId, identity.CorrelationId, sendResult.ResponseId,
+                "playback_pacing_summary", sendResult.MediaMessageCount,
+                sendResult.MaximumBufferedAudioDurationMs, "response_complete",
+                PacketDurationMs: sendResult.PacketDurationMs,
+                StartupBufferedAudioDurationMs: sendResult.StartupBufferedAudioDurationMs,
+                UnderflowCount: sendResult.UnderflowCount,
+                AveragePacingLatenessMs: sendResult.AveragePacingLatenessMs,
+                MaximumPacingLatenessMs: sendResult.MaximumPacingLatenessMs));
             lock (synchronization)
             {
                 if (activeResponseGeneration == generation)

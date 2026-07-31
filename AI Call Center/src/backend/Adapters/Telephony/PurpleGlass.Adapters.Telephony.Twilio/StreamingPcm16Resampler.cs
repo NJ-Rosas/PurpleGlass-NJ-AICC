@@ -12,6 +12,11 @@ public sealed class StreamingPcm16Resampler
     private byte incompleteSampleByte;
     private bool hasIncompleteSample;
     private bool completed;
+    private int inputByteCount;
+    private int chunkCount;
+    private int firstOutputOffset = -1;
+    private int lastOutputOffset = -1;
+    private int flushOutputSamples;
 
     public StreamingPcm16Resampler(int sourceRateHz, int targetRateHz)
     {
@@ -25,9 +30,23 @@ public sealed class StreamingPcm16Resampler
 
     public int OutputSampleCount => nextTargetSample;
 
+    public StreamingPcm16ResamplerDiagnostics Diagnostics => new(
+        inputByteCount,
+        sourceSamples.Count,
+        chunkCount,
+        nextTargetSample,
+        firstOutputOffset,
+        lastOutputOffset,
+        hasIncompleteSample ? 1 : 0,
+        sourceSamples.Count,
+        flushOutputSamples,
+        completed);
+
     public byte[] Convert(ReadOnlySpan<byte> pcm16LittleEndian, bool isFinal)
     {
         if (completed) throw new InvalidOperationException("The streaming resampler has already completed.");
+        inputByteCount = checked(inputByteCount + pcm16LittleEndian.Length);
+        chunkCount++;
 
         int offset = 0;
         if (hasIncompleteSample && pcm16LittleEndian.Length > 0)
@@ -57,13 +76,23 @@ public sealed class StreamingPcm16Resampler
                 MidpointRounding.AwayFromZero))
             : int.MaxValue;
         var output = new List<short>();
+        int outputStart = nextTargetSample;
         while (nextTargetSample < finalTargetCount && CanProduce(nextTargetSample, isFinal))
         {
             output.Add(Resample(nextTargetSample));
             nextTargetSample++;
         }
 
-        if (isFinal) completed = true;
+        if (output.Count > 0)
+        {
+            if (firstOutputOffset < 0) firstOutputOffset = outputStart;
+            lastOutputOffset = nextTargetSample - 1;
+        }
+        if (isFinal)
+        {
+            flushOutputSamples = output.Count;
+            completed = true;
+        }
         var bytes = new byte[checked(output.Count * sizeof(short))];
         for (int index = 0; index < output.Count; index++)
             BinaryPrimitives.WriteInt16LittleEndian(bytes.AsSpan(index * sizeof(short)), output[index]);
@@ -109,3 +138,15 @@ public sealed class StreamingPcm16Resampler
         return (short)Math.Clamp(interpolated, short.MinValue, short.MaxValue);
     }
 }
+
+public sealed record StreamingPcm16ResamplerDiagnostics(
+    int InputByteCount,
+    int InputSampleCount,
+    int ChunkCount,
+    int OutputSampleCount,
+    int FirstOutputOffset,
+    int LastOutputOffset,
+    int CarryByteCount,
+    int HistorySampleCount,
+    int FlushOutputSampleCount,
+    bool Completed);

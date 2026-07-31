@@ -88,15 +88,25 @@ public sealed class TwilioRealtimeAudioTransport : IRealtimeAudioTransport
             response.AppendMuLaw(encoded);
 
             int pacedMediaBytes = options.OutboundPacketBytes;
+            if (options.EnableOutboundPacing)
+            {
+                long now = timeProvider.GetTimestamp();
+                response.ObserveProducerState(now);
+                if (response.IsBuffering
+                    && !chunk.IsFinal
+                    && response.BufferedMuLawBytes < options.OutboundStartupBufferBytes)
+                    return response.Result(markSent: false, options);
+                if (response.IsBuffering)
+                    response.BeginPacingSegment(now, options);
+            }
             while (response.BufferedMuLawBytes >= pacedMediaBytes
                 || (chunk.IsFinal && response.BufferedMuLawBytes > 0))
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 int length = Math.Min(pacedMediaBytes, response.BufferedMuLawBytes);
-                if (options.EnableOutboundPacing && response.MediaMessageCount > 0)
+                if (options.EnableOutboundPacing)
                 {
-                    TimeSpan targetElapsed = options.OutboundPacketDuration * response.MediaMessageCount;
-                    TimeSpan remaining = targetElapsed - timeProvider.GetElapsedTime(response.PacingStartedTimestamp);
+                    TimeSpan remaining = response.DelayUntilNextPacket(timeProvider.GetTimestamp(), timeProvider);
                     if (remaining > TimeSpan.Zero)
                         await Task.Delay(remaining, timeProvider, cancellationToken);
                 }
@@ -109,7 +119,7 @@ public sealed class TwilioRealtimeAudioTransport : IRealtimeAudioTransport
                     streamSid = ProviderMediaStreamId,
                     media = new { payload },
                 }, cancellationToken);
-                response.RecordMediaSent(length, timeProvider.GetTimestamp());
+                response.RecordMediaSent(length, timeProvider.GetTimestamp(), options, timeProvider);
             }
 
             if (!chunk.IsFinal)
@@ -142,6 +152,9 @@ public sealed class TwilioRealtimeAudioTransport : IRealtimeAudioTransport
             Activity.Current?.SetTag("voice.mulaw_bytes", response.TotalMuLawBytes);
             Activity.Current?.SetTag("voice.media_message_count", response.MediaMessageCount);
             Activity.Current?.SetTag("voice.mark_sent", true);
+            Activity.Current?.SetTag("voice.playback_underflow_count", response.UnderflowCount);
+            Activity.Current?.SetTag("voice.playback_max_lateness_ms", response.MaximumPacingLatenessMs);
+            Activity.Current?.SetTag("voice.playback_startup_buffered_ms", response.StartupBufferedAudioDurationMs);
             RealtimeAudioSendResult result = response.Result(markSent: true, options);
             outboundResponse = null;
             response.Dispose();
@@ -429,8 +442,7 @@ public sealed class TwilioRealtimeAudioTransport : IRealtimeAudioTransport
                     "provider_media_sequence_invalid", "Synthesized audio chunks were out of sequence.");
             outboundResponse = new OutboundResponse(
                 $"response-{Interlocked.Increment(ref markSequence)}",
-                chunk.Format,
-                timeProvider.GetTimestamp());
+                chunk.Format);
         }
         else if (outboundResponse.Format != chunk.Format)
         {
@@ -453,12 +465,18 @@ public sealed class TwilioRealtimeAudioTransport : IRealtimeAudioTransport
         private readonly MemoryStream pendingMuLaw = new();
         private int pendingReadOffset;
         private long nextSequence = 1;
+        private long bufferedUntilTimestamp;
+        private long nextPacketTargetTimestamp;
+        private int immediatePacketsRemaining;
+        private bool playbackStarted;
+        private bool isBuffering = true;
+        private double pacingLatenessTotalMs;
+        private int pacedPacketCount;
 
-        public OutboundResponse(string responseId, AudioFormat format, long pacingStartedTimestamp)
+        public OutboundResponse(string responseId, AudioFormat format)
         {
             ResponseId = responseId;
             Format = format;
-            PacingStartedTimestamp = pacingStartedTimestamp;
             Resampler = new StreamingPcm16Resampler(
                 format.SampleRateHz,
                 TwilioRealtimeAudioProtocol.TelephonySampleRate);
@@ -467,12 +485,16 @@ public sealed class TwilioRealtimeAudioTransport : IRealtimeAudioTransport
         public string ResponseId { get; }
         public AudioFormat Format { get; }
         public StreamingPcm16Resampler Resampler { get; }
-        public long PacingStartedTimestamp { get; private set; }
         public long FirstMediaSentTimestamp { get; private set; }
         public int SourcePcmBytes { get; private set; }
         public int TotalMuLawBytes { get; private set; }
         public int MediaMessageCount { get; private set; }
         public int BufferedMuLawBytes => checked((int)pendingMuLaw.Length - pendingReadOffset);
+        public bool IsBuffering => isBuffering;
+        public int UnderflowCount { get; private set; }
+        public double StartupBufferedAudioDurationMs { get; private set; }
+        public double MaximumBufferedAudioDurationMs { get; private set; }
+        public double MaximumPacingLatenessMs { get; private set; }
 
         public void AppendSource(SynthesizedAudioChunk chunk, int maximumResponseBytes)
         {
@@ -511,15 +533,81 @@ public sealed class TwilioRealtimeAudioTransport : IRealtimeAudioTransport
             return packet;
         }
 
-        public void RecordMediaSent(int length, long timestamp)
+        public void ObserveProducerState(long timestamp)
+        {
+            if (!playbackStarted || isBuffering || timestamp <= bufferedUntilTimestamp) return;
+            isBuffering = true;
+            UnderflowCount++;
+        }
+
+        public void BeginPacingSegment(
+            long timestamp,
+            TwilioRealtimeAudioOptions options)
+        {
+            isBuffering = false;
+            immediatePacketsRemaining = Math.Max(1,
+                (int)(options.OutboundStartupBufferDuration.Ticks / options.OutboundPacketDuration.Ticks));
+            StartupBufferedAudioDurationMs = Math.Max(
+                StartupBufferedAudioDurationMs,
+                Math.Min(BufferedMuLawBytes, options.OutboundStartupBufferBytes)
+                    * 1000d / TwilioRealtimeAudioProtocol.TelephonySampleRate);
+            nextPacketTargetTimestamp = timestamp;
+            if (!playbackStarted) bufferedUntilTimestamp = timestamp;
+        }
+
+        public TimeSpan DelayUntilNextPacket(long timestamp, TimeProvider provider)
+        {
+            if (immediatePacketsRemaining > 0) return TimeSpan.Zero;
+            TimeSpan remaining = provider.GetElapsedTime(timestamp, nextPacketTargetTimestamp);
+            return remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero;
+        }
+
+        public void RecordMediaSent(
+            int length,
+            long timestamp,
+            TwilioRealtimeAudioOptions options,
+            TimeProvider provider)
         {
             if (MediaMessageCount == 0)
             {
                 FirstMediaSentTimestamp = timestamp;
-                PacingStartedTimestamp = timestamp;
+            }
+            if (options.EnableOutboundPacing)
+            {
+                if (immediatePacketsRemaining > 0)
+                {
+                    immediatePacketsRemaining--;
+                    if (immediatePacketsRemaining == 0)
+                        nextPacketTargetTimestamp = Add(timestamp, options.OutboundPacketDuration, provider);
+                }
+                else
+                {
+                    double latenessMs = Math.Max(0,
+                        provider.GetElapsedTime(nextPacketTargetTimestamp, timestamp).TotalMilliseconds);
+                    pacingLatenessTotalMs += latenessMs;
+                    pacedPacketCount++;
+                    MaximumPacingLatenessMs = Math.Max(MaximumPacingLatenessMs, latenessMs);
+                    nextPacketTargetTimestamp = latenessMs > options.MaximumPacingLateness.TotalMilliseconds
+                        ? Add(timestamp, options.OutboundPacketDuration, provider)
+                        : Add(nextPacketTargetTimestamp, options.OutboundPacketDuration, provider);
+                }
+
+                if (timestamp > bufferedUntilTimestamp) bufferedUntilTimestamp = timestamp;
+                bufferedUntilTimestamp = Add(
+                    bufferedUntilTimestamp,
+                    TimeSpan.FromSeconds(length / (double)TwilioRealtimeAudioProtocol.TelephonySampleRate),
+                    provider);
+                MaximumBufferedAudioDurationMs = Math.Max(MaximumBufferedAudioDurationMs,
+                    provider.GetElapsedTime(timestamp, bufferedUntilTimestamp).TotalMilliseconds);
+                playbackStarted = true;
             }
             MediaMessageCount++;
         }
+
+        private static long Add(long timestamp, TimeSpan duration, TimeProvider provider) =>
+            checked(timestamp + (long)Math.Round(
+                duration.TotalSeconds * provider.TimestampFrequency,
+                MidpointRounding.AwayFromZero));
 
         public RealtimeAudioSendResult Result(bool markSent, TwilioRealtimeAudioOptions options) => new(
             ResponseId,
@@ -529,7 +617,12 @@ public sealed class TwilioRealtimeAudioTransport : IRealtimeAudioTransport
             TotalMuLawBytes,
             MediaMessageCount,
             markSent,
-            options.EnableOutboundPacing ? options.OutboundPacketDuration.TotalMilliseconds : 0);
+            options.EnableOutboundPacing ? MaximumBufferedAudioDurationMs : 0,
+            options.EnableOutboundPacing ? options.OutboundPacketDuration.TotalMilliseconds : 0,
+            options.EnableOutboundPacing ? StartupBufferedAudioDurationMs : 0,
+            options.EnableOutboundPacing ? UnderflowCount : 0,
+            pacedPacketCount == 0 ? 0 : pacingLatenessTotalMs / pacedPacketCount,
+            MaximumPacingLatenessMs);
 
         public void Dispose()
         {
