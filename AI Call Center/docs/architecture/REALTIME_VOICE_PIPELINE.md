@@ -93,6 +93,27 @@ The quality buffer adds no designed startup delay relative to the prior 100 ms f
 
 Endpoint telemetry now measures `last speech-bearing inbound frame -> endpoint detected` explicitly. VAD and trailing-silence thresholds are unchanged: the production-proven natural-pause behavior is preserved. STT, LLM, and TTS provider choices are also unchanged. The local hardening is not evidence that the human-audible defects are fixed; that requires one controlled production revalidation from the exact candidate SHA.
 
+### Task 16.1.3 remote-reserve correction
+
+The controlled deployment of `8445bf14ad06da4c167f91c4f5218d4b92e5a7ea` failed audio-quality validation: the tester heard frequent cutoffs, and every completed response reported one or more underflows (17 total). Maximum reported lateness clustered near 80 ms. The initial five-packet burst did put 100 ms of audio in Twilio's ordered playback queue; the reserve was therefore remote, not merely a 100 ms local queue threshold. The defect was in steady state. After a late send depleted part of that reserve, deadline rebasing scheduled future packets without restoring the lost send-ahead. The reduced reserve persisted until a later delay exhausted it.
+
+The old accounting also obscured the transition. Its lateness timestamp was captured after `WebSocket.SendAsync`, so scheduler wake delay and wire-send duration were combined. Underflow was checked mainly when a later provider delta entered the transport, while the implicit restart path exposed no separate rebuffer count. An empty terminal provider update could consequently observe an exhausted playback timeline even though no audio remained, inflating underflow telemetry without representing an audible starvation episode.
+
+The authoritative response state is now:
+
+- `BufferedMuLawBytes` is local, converted, unsent audio only.
+- `bufferedUntilTimestamp` is the estimated end of media actually sent to Twilio, measured from the first completed media send and reset with the response on cancellation/clear.
+- estimated remote reserve is `max(0, bufferedUntilTimestamp - now)`; local queued audio is never included.
+- `nextPacketTargetTimestamp` is the monotonic scheduler deadline, bounded by the remote-reserve target.
+- scheduler lateness, producer starvation, remote-buffer exhaustion, and WebSocket send duration are independent observations.
+- one starvation episode can create at most one remote-underflow count and one rebuffer completion.
+
+Startup still requires 100 ms of real converted audio for a non-final response, then transmits five 20 ms packets promptly so Twilio owns the reserve before steady pacing. A final response shorter than 100 ms uses its complete real-audio length as the bounded startup target. During steady state, a late completion computes the remaining Twilio reserve and sends only the whole packets required to restore it, never exceeding the 100 ms target. This is reserve repair, not unbounded deadline catch-up. If the remote reserve reaches zero because the provider has not supplied audio, playback waits for a fresh 100 ms local threshold; the rebuilt reserve is then sent once before normal pacing resumes. A final short tail rebuilds only its available real-audio duration. No synthetic silence is inserted.
+
+Completion sends the mark only after all source PCM, final resampler output, μ-law bytes, and real media packets have been sent. An empty final update after playback naturally drains is not classified as underflow. Generation cancellation during startup, pacing, starvation, or rebuffer disposes the response state; `clear` invalidates both local audio and the old remote-reserve estimate, and the next response begins independently.
+
+The response-level pacing summary now reports scheduler-late count and average/maximum scheduler lateness, producer-starvation count, remote-buffer-underflow count, rebuffer count and total duration, initial reserve, minimum/maximum estimated remote reserve, and maximum WebSocket send duration. These remain numeric, bounded-cardinality values. No packet payload, PCM, transcript, prompt, or response text is logged. Deterministic tests establish the state transitions locally; they do not claim that production audio is corrected until another controlled call validates the new exact SHA.
+
 ## Turn detection and backpressure
 
 The transport feeds a bounded audio channel. A single detector consumes frames, suppresses duplicate or out-of-order sequence numbers, checks PCM16 energy, and finalizes an utterance on one of these signals:

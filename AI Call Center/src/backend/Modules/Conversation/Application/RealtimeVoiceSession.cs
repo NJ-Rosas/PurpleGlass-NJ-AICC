@@ -800,7 +800,15 @@ public sealed class RealtimeVoiceSession(
                 StartupBufferedAudioDurationMs: sendResult.StartupBufferedAudioDurationMs,
                 UnderflowCount: sendResult.UnderflowCount,
                 AveragePacingLatenessMs: sendResult.AveragePacingLatenessMs,
-                MaximumPacingLatenessMs: sendResult.MaximumPacingLatenessMs));
+                MaximumPacingLatenessMs: sendResult.MaximumPacingLatenessMs,
+                SchedulerLateCount: sendResult.SchedulerLateCount,
+                ProducerStarvationCount: sendResult.ProducerStarvationCount,
+                RemoteBufferUnderflowCount: sendResult.RemoteBufferUnderflowCount,
+                RebufferCount: sendResult.RebufferCount,
+                TotalRebufferMs: sendResult.TotalRebufferMs,
+                MinimumEstimatedRemoteReserveMs: sendResult.MinimumEstimatedRemoteReserveMs,
+                MaximumEstimatedRemoteReserveMs: sendResult.MaximumEstimatedRemoteReserveMs,
+                MaximumSendDurationMs: sendResult.MaximumSendDurationMs));
             lock (synchronization)
             {
                 if (activeResponseGeneration == generation)

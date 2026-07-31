@@ -92,7 +92,15 @@ public sealed record VoicePlaybackEventDiagnostic(
     double StartupBufferedAudioDurationMs = 0,
     int UnderflowCount = 0,
     double AveragePacingLatenessMs = 0,
-    double MaximumPacingLatenessMs = 0);
+    double MaximumPacingLatenessMs = 0,
+    int SchedulerLateCount = 0,
+    int ProducerStarvationCount = 0,
+    int RemoteBufferUnderflowCount = 0,
+    int RebufferCount = 0,
+    double TotalRebufferMs = 0,
+    double MinimumEstimatedRemoteReserveMs = 0,
+    double MaximumEstimatedRemoteReserveMs = 0,
+    double MaximumSendDurationMs = 0);
 
 public sealed record VoiceLatencyDiagnostic(
     Guid CallId,

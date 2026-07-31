@@ -91,25 +91,35 @@ public sealed class TwilioRealtimeAudioTransport : IRealtimeAudioTransport
             if (options.EnableOutboundPacing)
             {
                 long now = timeProvider.GetTimestamp();
-                response.ObserveProducerState(now);
-                if (response.IsBuffering
-                    && !chunk.IsFinal
-                    && response.BufferedMuLawBytes < options.OutboundStartupBufferBytes)
+                response.ObserveProducerState(
+                    now, chunk.IsFinal, response.BufferedMuLawBytes > 0, timeProvider);
+                int requiredBufferBytes = response.RequiredBufferBytes(options, chunk.IsFinal);
+                if (response.IsBuffering && response.BufferedMuLawBytes < requiredBufferBytes)
                     return response.Result(markSent: false, options);
-                if (response.IsBuffering)
+                if (response.IsBuffering && response.BufferedMuLawBytes > 0)
                     response.BeginPacingSegment(now, options);
             }
             while (response.BufferedMuLawBytes >= pacedMediaBytes
                 || (chunk.IsFinal && response.BufferedMuLawBytes > 0))
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                int length = Math.Min(pacedMediaBytes, response.BufferedMuLawBytes);
+                long sendStarted = timeProvider.GetTimestamp();
                 if (options.EnableOutboundPacing)
                 {
-                    TimeSpan remaining = response.DelayUntilNextPacket(timeProvider.GetTimestamp(), timeProvider);
+                    TimeSpan remaining = response.DelayUntilNextPacket(sendStarted, timeProvider);
                     if (remaining > TimeSpan.Zero)
                         await Task.Delay(remaining, timeProvider, cancellationToken);
+                    sendStarted = timeProvider.GetTimestamp();
+                    response.ObserveSchedulerWake(sendStarted, options, timeProvider);
+                    if (response.IsBuffering)
+                    {
+                        int requiredBufferBytes = response.RequiredBufferBytes(options, chunk.IsFinal);
+                        if (response.BufferedMuLawBytes < requiredBufferBytes)
+                            return response.Result(markSent: false, options);
+                        response.BeginPacingSegment(sendStarted, options);
+                    }
                 }
+                int length = Math.Min(pacedMediaBytes, response.BufferedMuLawBytes);
                 byte[] packet = response.TakeMuLaw(length);
                 string payload = Convert.ToBase64String(packet);
                 CryptographicOperations.ZeroMemory(packet);
@@ -119,7 +129,8 @@ public sealed class TwilioRealtimeAudioTransport : IRealtimeAudioTransport
                     streamSid = ProviderMediaStreamId,
                     media = new { payload },
                 }, cancellationToken);
-                response.RecordMediaSent(length, timeProvider.GetTimestamp(), options, timeProvider);
+                response.RecordMediaSent(
+                    length, sendStarted, timeProvider.GetTimestamp(), options, timeProvider);
             }
 
             if (!chunk.IsFinal)
@@ -155,6 +166,14 @@ public sealed class TwilioRealtimeAudioTransport : IRealtimeAudioTransport
             Activity.Current?.SetTag("voice.playback_underflow_count", response.UnderflowCount);
             Activity.Current?.SetTag("voice.playback_max_lateness_ms", response.MaximumPacingLatenessMs);
             Activity.Current?.SetTag("voice.playback_startup_buffered_ms", response.StartupBufferedAudioDurationMs);
+            Activity.Current?.SetTag("voice.playback_scheduler_late_count", response.SchedulerLateCount);
+            Activity.Current?.SetTag("voice.playback_producer_starvation_count", response.ProducerStarvationCount);
+            Activity.Current?.SetTag("voice.playback_remote_buffer_underflow_count", response.RemoteBufferUnderflowCount);
+            Activity.Current?.SetTag("voice.playback_rebuffer_count", response.RebufferCount);
+            Activity.Current?.SetTag("voice.playback_total_rebuffer_ms", response.TotalRebufferMs);
+            Activity.Current?.SetTag("voice.playback_min_remote_reserve_ms", response.MinimumEstimatedRemoteReserveMs);
+            Activity.Current?.SetTag("voice.playback_max_remote_reserve_ms", response.MaximumEstimatedRemoteReserveMs);
+            Activity.Current?.SetTag("voice.playback_max_send_duration_ms", response.MaximumSendDurationMs);
             RealtimeAudioSendResult result = response.Result(markSent: true, options);
             outboundResponse = null;
             response.Dispose();
@@ -470,8 +489,14 @@ public sealed class TwilioRealtimeAudioTransport : IRealtimeAudioTransport
         private int immediatePacketsRemaining;
         private bool playbackStarted;
         private bool isBuffering = true;
+        private bool rebufferPending;
+        private long rebufferStartedTimestamp;
+        private bool currentPacketIsPaced;
+        private double currentSchedulerLatenessMs;
         private double pacingLatenessTotalMs;
         private int pacedPacketCount;
+        private bool minimumRemoteReserveObserved;
+        private bool initialReserveComplete;
 
         public OutboundResponse(string responseId, AudioFormat format)
         {
@@ -492,9 +517,17 @@ public sealed class TwilioRealtimeAudioTransport : IRealtimeAudioTransport
         public int BufferedMuLawBytes => checked((int)pendingMuLaw.Length - pendingReadOffset);
         public bool IsBuffering => isBuffering;
         public int UnderflowCount { get; private set; }
+        public int SchedulerLateCount { get; private set; }
+        public int ProducerStarvationCount { get; private set; }
+        public int RemoteBufferUnderflowCount { get; private set; }
+        public int RebufferCount { get; private set; }
+        public double TotalRebufferMs { get; private set; }
         public double StartupBufferedAudioDurationMs { get; private set; }
         public double MaximumBufferedAudioDurationMs { get; private set; }
+        public double MinimumEstimatedRemoteReserveMs { get; private set; }
+        public double MaximumEstimatedRemoteReserveMs { get; private set; }
         public double MaximumPacingLatenessMs { get; private set; }
+        public double MaximumSendDurationMs { get; private set; }
 
         public void AppendSource(SynthesizedAudioChunk chunk, int maximumResponseBytes)
         {
@@ -533,26 +566,44 @@ public sealed class TwilioRealtimeAudioTransport : IRealtimeAudioTransport
             return packet;
         }
 
-        public void ObserveProducerState(long timestamp)
+        public int RequiredBufferBytes(TwilioRealtimeAudioOptions options, bool providerCompleted) =>
+            providerCompleted
+                ? Math.Min(BufferedMuLawBytes, options.OutboundStartupBufferBytes)
+                : options.OutboundStartupBufferBytes;
+
+        public void ObserveProducerState(
+            long timestamp,
+            bool providerCompleted,
+            bool hasPendingAudio,
+            TimeProvider provider)
         {
             if (!playbackStarted || isBuffering || timestamp <= bufferedUntilTimestamp) return;
-            isBuffering = true;
-            UnderflowCount++;
+            ObserveRemoteReserve(timestamp, provider);
+            if (providerCompleted && !hasPendingAudio) return;
+            StartUnderflow(bufferedUntilTimestamp, producerStarved: true);
         }
 
         public void BeginPacingSegment(
             long timestamp,
             TwilioRealtimeAudioOptions options)
         {
+            bool startingPlayback = !playbackStarted;
             isBuffering = false;
             immediatePacketsRemaining = Math.Max(1,
                 (int)(options.OutboundStartupBufferDuration.Ticks / options.OutboundPacketDuration.Ticks));
-            StartupBufferedAudioDurationMs = Math.Max(
-                StartupBufferedAudioDurationMs,
-                Math.Min(BufferedMuLawBytes, options.OutboundStartupBufferBytes)
-                    * 1000d / TwilioRealtimeAudioProtocol.TelephonySampleRate);
+            if (startingPlayback)
+            {
+                StartupBufferedAudioDurationMs = Math.Max(
+                    StartupBufferedAudioDurationMs,
+                    Math.Min(BufferedMuLawBytes, options.OutboundStartupBufferBytes)
+                        * 1000d / TwilioRealtimeAudioProtocol.TelephonySampleRate);
+                bufferedUntilTimestamp = timestamp;
+            }
+            else
+            {
+                rebufferPending = true;
+            }
             nextPacketTargetTimestamp = timestamp;
-            if (!playbackStarted) bufferedUntilTimestamp = timestamp;
         }
 
         public TimeSpan DelayUntilNextPacket(long timestamp, TimeProvider provider)
@@ -562,47 +613,168 @@ public sealed class TwilioRealtimeAudioTransport : IRealtimeAudioTransport
             return remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero;
         }
 
+        public void ObserveSchedulerWake(
+            long timestamp,
+            TwilioRealtimeAudioOptions options,
+            TimeProvider provider)
+        {
+            currentPacketIsPaced = immediatePacketsRemaining == 0;
+            currentSchedulerLatenessMs = 0;
+            if (!currentPacketIsPaced) return;
+
+            currentSchedulerLatenessMs = Math.Max(0,
+                provider.GetElapsedTime(nextPacketTargetTimestamp, timestamp).TotalMilliseconds);
+            pacingLatenessTotalMs += currentSchedulerLatenessMs;
+            pacedPacketCount++;
+            if (currentSchedulerLatenessMs > 0)
+            {
+                SchedulerLateCount++;
+                MaximumPacingLatenessMs = Math.Max(
+                    MaximumPacingLatenessMs, currentSchedulerLatenessMs);
+            }
+
+            if (playbackStarted && timestamp > bufferedUntilTimestamp)
+            {
+                ObserveRemoteReserve(timestamp, provider);
+                StartUnderflow(bufferedUntilTimestamp, producerStarved: false);
+            }
+        }
+
         public void RecordMediaSent(
             int length,
-            long timestamp,
+            long sendStartedTimestamp,
+            long sendCompletedTimestamp,
             TwilioRealtimeAudioOptions options,
             TimeProvider provider)
         {
             if (MediaMessageCount == 0)
             {
-                FirstMediaSentTimestamp = timestamp;
+                FirstMediaSentTimestamp = sendCompletedTimestamp;
             }
             if (options.EnableOutboundPacing)
             {
+                double sendDurationMs = Math.Max(0,
+                    provider.GetElapsedTime(sendStartedTimestamp, sendCompletedTimestamp).TotalMilliseconds);
+                MaximumSendDurationMs = Math.Max(MaximumSendDurationMs, sendDurationMs);
+                bool wasImmediate = immediatePacketsRemaining > 0;
+                long previousBufferedUntil = bufferedUntilTimestamp;
+
+                if (playbackStarted
+                    && !rebufferPending
+                    && sendCompletedTimestamp > previousBufferedUntil)
+                {
+                    ObserveRemoteReserve(sendCompletedTimestamp, provider);
+                    StartUnderflow(previousBufferedUntil, producerStarved: false);
+                    isBuffering = false;
+                    rebufferPending = true;
+                }
+
                 if (immediatePacketsRemaining > 0)
                 {
                     immediatePacketsRemaining--;
-                    if (immediatePacketsRemaining == 0)
-                        nextPacketTargetTimestamp = Add(timestamp, options.OutboundPacketDuration, provider);
                 }
-                else
+                else if (currentPacketIsPaced)
                 {
-                    double latenessMs = Math.Max(0,
-                        provider.GetElapsedTime(nextPacketTargetTimestamp, timestamp).TotalMilliseconds);
-                    pacingLatenessTotalMs += latenessMs;
-                    pacedPacketCount++;
-                    MaximumPacingLatenessMs = Math.Max(MaximumPacingLatenessMs, latenessMs);
-                    nextPacketTargetTimestamp = latenessMs > options.MaximumPacingLateness.TotalMilliseconds
-                        ? Add(timestamp, options.OutboundPacketDuration, provider)
+                    nextPacketTargetTimestamp = currentSchedulerLatenessMs
+                        > options.MaximumPacingLateness.TotalMilliseconds
+                        ? Add(sendStartedTimestamp, options.OutboundPacketDuration, provider)
                         : Add(nextPacketTargetTimestamp, options.OutboundPacketDuration, provider);
                 }
 
-                if (timestamp > bufferedUntilTimestamp) bufferedUntilTimestamp = timestamp;
+                if (sendCompletedTimestamp > bufferedUntilTimestamp)
+                    bufferedUntilTimestamp = sendCompletedTimestamp;
                 bufferedUntilTimestamp = Add(
                     bufferedUntilTimestamp,
                     TimeSpan.FromSeconds(length / (double)TwilioRealtimeAudioProtocol.TelephonySampleRate),
                     provider);
-                MaximumBufferedAudioDurationMs = Math.Max(MaximumBufferedAudioDurationMs,
-                    provider.GetElapsedTime(timestamp, bufferedUntilTimestamp).TotalMilliseconds);
+
+                if (rebufferPending)
+                {
+                    RebufferCount++;
+                    TotalRebufferMs += Math.Max(0,
+                        provider.GetElapsedTime(rebufferStartedTimestamp, sendCompletedTimestamp)
+                            .TotalMilliseconds);
+                    rebufferPending = false;
+                }
+
+                if (!initialReserveComplete && immediatePacketsRemaining == 0)
+                    initialReserveComplete = true;
+                ObserveRemoteReserve(
+                    sendCompletedTimestamp, provider, includeMinimum: initialReserveComplete);
+                int reserveDeficitPackets = PacketsRequiredToRestoreReserve(
+                    sendCompletedTimestamp, options, provider);
+                immediatePacketsRemaining = Math.Max(
+                    immediatePacketsRemaining, reserveDeficitPackets);
+                if (immediatePacketsRemaining == 0 && wasImmediate)
+                {
+                    nextPacketTargetTimestamp = Add(
+                        sendCompletedTimestamp, options.OutboundPacketDuration, provider);
+                }
+                if (immediatePacketsRemaining == 0)
+                {
+                    double reserveMs = EstimatedRemoteReserveMs(sendCompletedTimestamp, provider);
+                    double minimumDelayMs = Math.Max(0,
+                        reserveMs + options.OutboundPacketDuration.TotalMilliseconds
+                            - options.OutboundStartupBufferDuration.TotalMilliseconds);
+                    long reserveBoundDeadline = Add(
+                        sendCompletedTimestamp, TimeSpan.FromMilliseconds(minimumDelayMs), provider);
+                    nextPacketTargetTimestamp = Math.Max(
+                        nextPacketTargetTimestamp, reserveBoundDeadline);
+                }
                 playbackStarted = true;
             }
             MediaMessageCount++;
         }
+
+        private void StartUnderflow(long exhaustedTimestamp, bool producerStarved)
+        {
+            if (isBuffering) return;
+            isBuffering = true;
+            rebufferStartedTimestamp = exhaustedTimestamp;
+            UnderflowCount++;
+            RemoteBufferUnderflowCount++;
+            if (producerStarved) ProducerStarvationCount++;
+            MinimumEstimatedRemoteReserveMs = 0;
+            minimumRemoteReserveObserved = true;
+        }
+
+        private int PacketsRequiredToRestoreReserve(
+            long timestamp,
+            TwilioRealtimeAudioOptions options,
+            TimeProvider provider)
+        {
+            double reserveMs = EstimatedRemoteReserveMs(timestamp, provider);
+            double deficitMs = Math.Max(
+                0, options.OutboundStartupBufferDuration.TotalMilliseconds - reserveMs);
+            return (int)Math.Floor(
+                (deficitMs + 0.000_001) / options.OutboundPacketDuration.TotalMilliseconds);
+        }
+
+        private void ObserveRemoteReserve(
+            long timestamp,
+            TimeProvider provider,
+            bool includeMinimum = true)
+        {
+            double reserveMs = EstimatedRemoteReserveMs(timestamp, provider);
+            if (includeMinimum && !minimumRemoteReserveObserved)
+            {
+                MinimumEstimatedRemoteReserveMs = reserveMs;
+                minimumRemoteReserveObserved = true;
+            }
+            else if (includeMinimum)
+            {
+                MinimumEstimatedRemoteReserveMs = Math.Min(
+                    MinimumEstimatedRemoteReserveMs, reserveMs);
+            }
+            MaximumEstimatedRemoteReserveMs = Math.Max(
+                MaximumEstimatedRemoteReserveMs, reserveMs);
+            MaximumBufferedAudioDurationMs = MaximumEstimatedRemoteReserveMs;
+        }
+
+        private double EstimatedRemoteReserveMs(long timestamp, TimeProvider provider) =>
+            timestamp >= bufferedUntilTimestamp
+                ? 0
+                : provider.GetElapsedTime(timestamp, bufferedUntilTimestamp).TotalMilliseconds;
 
         private static long Add(long timestamp, TimeSpan duration, TimeProvider provider) =>
             checked(timestamp + (long)Math.Round(
@@ -622,7 +794,15 @@ public sealed class TwilioRealtimeAudioTransport : IRealtimeAudioTransport
             options.EnableOutboundPacing ? StartupBufferedAudioDurationMs : 0,
             options.EnableOutboundPacing ? UnderflowCount : 0,
             pacedPacketCount == 0 ? 0 : pacingLatenessTotalMs / pacedPacketCount,
-            MaximumPacingLatenessMs);
+            MaximumPacingLatenessMs,
+            options.EnableOutboundPacing ? SchedulerLateCount : 0,
+            options.EnableOutboundPacing ? ProducerStarvationCount : 0,
+            options.EnableOutboundPacing ? RemoteBufferUnderflowCount : 0,
+            options.EnableOutboundPacing ? RebufferCount : 0,
+            options.EnableOutboundPacing ? TotalRebufferMs : 0,
+            options.EnableOutboundPacing ? MinimumEstimatedRemoteReserveMs : 0,
+            options.EnableOutboundPacing ? MaximumEstimatedRemoteReserveMs : 0,
+            options.EnableOutboundPacing ? MaximumSendDurationMs : 0);
 
         public void Dispose()
         {
