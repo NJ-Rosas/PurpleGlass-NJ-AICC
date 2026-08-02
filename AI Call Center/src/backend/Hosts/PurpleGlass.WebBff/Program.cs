@@ -196,7 +196,7 @@ Action<ILogger, string, double, int, double, int, bool, Exception?> logVoiceTran
     LoggerMessage.Define<string, double, int, double, int, bool>(
         LogLevel.Information,
         new EventId(208, "RealtimeVoiceTransportConfigured"),
-        "Realtime voice transport configured; ApplicationVersion={ApplicationVersion}, OutboundPacketDurationMs={OutboundPacketDurationMs}, OutboundPacketBytes={OutboundPacketBytes}, StartupBufferDurationMs={StartupBufferDurationMs}, MaxOutboundMediaBytes={MaxOutboundMediaBytes}, PacingEnabled={PacingEnabled}, PacingMode=monotonic_bounded_jitter_buffer.");
+        "Realtime voice transport configured; ApplicationVersion={ApplicationVersion}, OutboundPacketDurationMs={OutboundPacketDurationMs}, OutboundPacketBytes={OutboundPacketBytes}, StartupBufferDurationMs={StartupBufferDurationMs}, MaxOutboundMediaBytes={MaxOutboundMediaBytes}, PacingEnabled={PacingEnabled}, PacingMode=monotonic_bounded_low_high_reserve.");
 logVoiceTransportConfigured(
     app.Logger, applicationVersion, startupTransportOptions.OutboundPacketDuration.TotalMilliseconds,
     startupTransportOptions.OutboundPacketBytes,

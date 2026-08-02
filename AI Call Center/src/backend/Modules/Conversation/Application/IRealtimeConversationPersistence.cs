@@ -100,7 +100,13 @@ public sealed record VoicePlaybackEventDiagnostic(
     double TotalRebufferMs = 0,
     double MinimumEstimatedRemoteReserveMs = 0,
     double MaximumEstimatedRemoteReserveMs = 0,
-    double MaximumSendDurationMs = 0);
+    double MaximumSendDurationMs = 0,
+    double StartupTargetMs = 0,
+    double LowWaterThresholdMs = 0,
+    double HighWaterTargetMs = 0,
+    double MaximumSendAheadMs = 0,
+    int ProactiveRefillCount = 0,
+    double AverageSendDurationMs = 0);
 
 public sealed record VoiceLatencyDiagnostic(
     Guid CallId,

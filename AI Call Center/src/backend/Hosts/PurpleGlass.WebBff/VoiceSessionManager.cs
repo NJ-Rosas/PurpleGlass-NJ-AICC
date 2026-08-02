@@ -174,7 +174,10 @@ public sealed partial class BffVoiceSessionDiagnostics(ILogger<BffVoiceSessionDi
             diagnostic.ProducerStarvationCount, diagnostic.RemoteBufferUnderflowCount,
             diagnostic.RebufferCount, diagnostic.TotalRebufferMs,
             diagnostic.MinimumEstimatedRemoteReserveMs,
-            diagnostic.MaximumEstimatedRemoteReserveMs, diagnostic.MaximumSendDurationMs);
+            diagnostic.MaximumEstimatedRemoteReserveMs, diagnostic.MaximumSendDurationMs,
+            diagnostic.StartupTargetMs, diagnostic.LowWaterThresholdMs,
+            diagnostic.HighWaterTargetMs, diagnostic.MaximumSendAheadMs,
+            diagnostic.ProactiveRefillCount, diagnostic.AverageSendDurationMs);
 
     public void RecordLatency(VoiceLatencyDiagnostic diagnostic) =>
         LogLatency(logger, diagnostic.CallId, diagnostic.ConversationId,
@@ -209,7 +212,7 @@ public sealed partial class BffVoiceSessionDiagnostics(ILogger<BffVoiceSessionDi
         int muLawBytes, int mediaMessageCount, bool markSent, bool cleared, bool canceled);
 
     [LoggerMessage(207, LogLevel.Information,
-        "Realtime playback event; CallId={CallId}, CorrelationId={CorrelationId}, ResponseId={ResponseId}, Event={Event}, MediaMessagesSent={MediaMessagesSent}, BufferedAudioDurationMs={BufferedAudioDurationMs}, SafeReason={SafeReason}, ElapsedMs={ElapsedMs}, ElapsedFromFirstMediaMs={ElapsedFromFirstMediaMs}, ElapsedFromMarkSentMs={ElapsedFromMarkSentMs}, PacketDurationMs={PacketDurationMs}, StartupBufferedAudioDurationMs={StartupBufferedAudioDurationMs}, UnderflowCount={UnderflowCount}, AveragePacingLatenessMs={AveragePacingLatenessMs}, MaximumPacingLatenessMs={MaximumPacingLatenessMs}, SchedulerLateCount={SchedulerLateCount}, ProducerStarvationCount={ProducerStarvationCount}, RemoteBufferUnderflowCount={RemoteBufferUnderflowCount}, RebufferCount={RebufferCount}, TotalRebufferMs={TotalRebufferMs}, MinimumEstimatedRemoteReserveMs={MinimumEstimatedRemoteReserveMs}, MaximumEstimatedRemoteReserveMs={MaximumEstimatedRemoteReserveMs}, MaximumSendDurationMs={MaximumSendDurationMs}.")]
+        "Realtime playback event; CallId={CallId}, CorrelationId={CorrelationId}, ResponseId={ResponseId}, Event={Event}, MediaMessagesSent={MediaMessagesSent}, BufferedAudioDurationMs={BufferedAudioDurationMs}, SafeReason={SafeReason}, ElapsedMs={ElapsedMs}, ElapsedFromFirstMediaMs={ElapsedFromFirstMediaMs}, ElapsedFromMarkSentMs={ElapsedFromMarkSentMs}, PacketDurationMs={PacketDurationMs}, StartupBufferedAudioDurationMs={StartupBufferedAudioDurationMs}, StartupTargetMs={StartupTargetMs}, LowWaterThresholdMs={LowWaterThresholdMs}, HighWaterTargetMs={HighWaterTargetMs}, MaximumSendAheadMs={MaximumSendAheadMs}, UnderflowCount={UnderflowCount}, AveragePacingLatenessMs={AveragePacingLatenessMs}, MaximumPacingLatenessMs={MaximumPacingLatenessMs}, SchedulerLateCount={SchedulerLateCount}, ProactiveRefillCount={ProactiveRefillCount}, ProducerStarvationCount={ProducerStarvationCount}, RemoteBufferUnderflowCount={RemoteBufferUnderflowCount}, RebufferCount={RebufferCount}, TotalRebufferMs={TotalRebufferMs}, MinimumEstimatedRemoteReserveMs={MinimumEstimatedRemoteReserveMs}, MaximumEstimatedRemoteReserveMs={MaximumEstimatedRemoteReserveMs}, AverageSendDurationMs={AverageSendDurationMs}, MaximumSendDurationMs={MaximumSendDurationMs}.")]
     private static partial void LogPlaybackEvent(ILogger logger, Guid callId, Guid correlationId,
         string responseId, string @event, int mediaMessagesSent,
         double bufferedAudioDurationMs, string safeReason, double elapsedMs,
@@ -218,7 +221,9 @@ public sealed partial class BffVoiceSessionDiagnostics(ILogger<BffVoiceSessionDi
         int underflowCount, double averagePacingLatenessMs, double maximumPacingLatenessMs,
         int schedulerLateCount, int producerStarvationCount, int remoteBufferUnderflowCount,
         int rebufferCount, double totalRebufferMs, double minimumEstimatedRemoteReserveMs,
-        double maximumEstimatedRemoteReserveMs, double maximumSendDurationMs);
+        double maximumEstimatedRemoteReserveMs, double maximumSendDurationMs,
+        double startupTargetMs, double lowWaterThresholdMs, double highWaterTargetMs,
+        double maximumSendAheadMs, int proactiveRefillCount, double averageSendDurationMs);
 
     [LoggerMessage(210, LogLevel.Information,
         "Realtime voice latency; CallId={CallId}, ConversationId={ConversationId}, CorrelationId={CorrelationId}, TurnId={TurnId}, ResponseId={ResponseId}, Stage={Stage}, DurationMs={DurationMs}, ElapsedFromEndpointMs={ElapsedFromEndpointMs}, Adapter={Adapter}, Result={Result}.")]

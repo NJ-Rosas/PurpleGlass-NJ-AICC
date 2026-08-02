@@ -808,7 +808,13 @@ public sealed class RealtimeVoiceSession(
                 TotalRebufferMs: sendResult.TotalRebufferMs,
                 MinimumEstimatedRemoteReserveMs: sendResult.MinimumEstimatedRemoteReserveMs,
                 MaximumEstimatedRemoteReserveMs: sendResult.MaximumEstimatedRemoteReserveMs,
-                MaximumSendDurationMs: sendResult.MaximumSendDurationMs));
+                MaximumSendDurationMs: sendResult.MaximumSendDurationMs,
+                StartupTargetMs: sendResult.StartupTargetMs,
+                LowWaterThresholdMs: sendResult.LowWaterThresholdMs,
+                HighWaterTargetMs: sendResult.HighWaterTargetMs,
+                MaximumSendAheadMs: sendResult.MaximumSendAheadMs,
+                ProactiveRefillCount: sendResult.ProactiveRefillCount,
+                AverageSendDurationMs: sendResult.AverageSendDurationMs));
             lock (synchronization)
             {
                 if (activeResponseGeneration == generation)

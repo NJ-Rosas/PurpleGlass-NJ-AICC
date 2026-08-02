@@ -22,7 +22,13 @@ public sealed class TwilioRealtimeAudioOptions
 
     public TimeSpan OutboundPacketDuration { get; init; } = TimeSpan.FromMilliseconds(20);
 
-    public TimeSpan OutboundStartupBufferDuration { get; init; } = TimeSpan.FromMilliseconds(100);
+    public TimeSpan OutboundStartupBufferDuration { get; init; } = TimeSpan.FromMilliseconds(280);
+
+    public TimeSpan OutboundLowWaterDuration { get; init; } = TimeSpan.FromMilliseconds(140);
+
+    public TimeSpan OutboundHighWaterDuration { get; init; } = TimeSpan.FromMilliseconds(280);
+
+    public TimeSpan OutboundMaximumSendAheadDuration { get; init; } = TimeSpan.FromMilliseconds(300);
 
     public TimeSpan MaximumPacingLateness { get; init; } = TimeSpan.FromMilliseconds(40);
 
@@ -34,6 +40,10 @@ public sealed class TwilioRealtimeAudioOptions
 
     public int OutboundStartupBufferBytes => checked((int)Math.Round(
         TwilioRealtimeAudioProtocol.TelephonySampleRate * OutboundStartupBufferDuration.TotalSeconds,
+        MidpointRounding.AwayFromZero));
+
+    public int OutboundHighWaterBytes => checked((int)Math.Round(
+        TwilioRealtimeAudioProtocol.TelephonySampleRate * OutboundHighWaterDuration.TotalSeconds,
         MidpointRounding.AwayFromZero));
 
     public TwilioRealtimeAudioOptions Validate()
@@ -58,14 +68,28 @@ public sealed class TwilioRealtimeAudioOptions
             || OutboundPacketDuration > TimeSpan.FromMilliseconds(250))
             throw new InvalidOperationException("Twilio outbound packet duration must be between 20 and 250 milliseconds.");
         if (OutboundStartupBufferDuration < OutboundPacketDuration
-            || OutboundStartupBufferDuration > TimeSpan.FromMilliseconds(250)
+            || OutboundStartupBufferDuration > TimeSpan.FromMilliseconds(300)
             || OutboundStartupBufferDuration.Ticks % OutboundPacketDuration.Ticks != 0)
             throw new InvalidOperationException(
-                "Twilio outbound startup buffer must be an exact packet multiple between one packet and 250 milliseconds.");
-        if (MaximumPacingLateness < TimeSpan.Zero
-            || MaximumPacingLateness > OutboundStartupBufferDuration)
+                "Twilio outbound startup buffer must be an exact packet multiple between one packet and 300 milliseconds.");
+        if (OutboundLowWaterDuration < OutboundPacketDuration
+            || OutboundLowWaterDuration >= OutboundHighWaterDuration
+            || OutboundLowWaterDuration.Ticks % OutboundPacketDuration.Ticks != 0)
             throw new InvalidOperationException(
-                "Twilio maximum pacing lateness must be between zero and the startup buffer duration.");
+                "Twilio outbound low water must be an exact packet multiple below high water.");
+        if (OutboundHighWaterDuration != OutboundStartupBufferDuration
+            || OutboundHighWaterDuration >= OutboundMaximumSendAheadDuration
+            || OutboundHighWaterDuration.Ticks % OutboundPacketDuration.Ticks != 0)
+            throw new InvalidOperationException(
+                "Twilio outbound high water must equal startup and be an exact packet multiple below maximum send-ahead.");
+        if (OutboundMaximumSendAheadDuration > TimeSpan.FromMilliseconds(300)
+            || OutboundMaximumSendAheadDuration.Ticks % OutboundPacketDuration.Ticks != 0)
+            throw new InvalidOperationException(
+                "Twilio outbound maximum send-ahead must be an exact packet multiple no greater than 300 milliseconds.");
+        if (MaximumPacingLateness < TimeSpan.Zero
+            || MaximumPacingLateness > OutboundHighWaterDuration)
+            throw new InvalidOperationException(
+                "Twilio maximum pacing lateness must be between zero and high water.");
         int pacedMediaBytes = OutboundPacketBytes;
         if (pacedMediaBytes < 80 || pacedMediaBytes > MaxOutboundMediaBytes)
             throw new InvalidOperationException("Twilio paced media must fit the outbound media bound.");
