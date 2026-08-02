@@ -11,7 +11,9 @@ public sealed record RegisterInboundCall(
     Guid CorrelationId,
     Guid? CausationId = null,
     string? TraceId = null,
-    string Provider = "Synthetic");
+    string Provider = "Synthetic",
+    string StartingLanguageCode = "en-US",
+    string StartingLanguageReason = "fallback");
 
 public sealed record RequestOutboundCall(
     Guid TenantId,
@@ -22,7 +24,9 @@ public sealed record RequestOutboundCall(
     Guid CorrelationId,
     Guid? CausationId = null,
     string? TraceId = null,
-    string Provider = "Synthetic");
+    string Provider = "Synthetic",
+    string StartingLanguageCode = "en-US",
+    string StartingLanguageReason = "fallback");
 
 public sealed record RequestTransportOutboundCall(
     Guid TenantId,
@@ -31,7 +35,8 @@ public sealed record RequestTransportOutboundCall(
     string DestinationNumber,
     Guid CorrelationId,
     Guid? CausationId = null,
-    string? TraceId = null);
+    string? TraceId = null,
+    string? LanguageCode = null);
 
 public sealed record AssignProviderCallIdentity(
     Guid TenantId,

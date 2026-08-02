@@ -12,11 +12,12 @@ public sealed class ConversationDbContext(DbContextOptions<ConversationDbContext
 {
     public DbSet<ConversationAggregate> Conversations => Set<ConversationAggregate>();
     public DbSet<ConversationTurn> Turns => Set<ConversationTurn>();
+    public DbSet<ConversationLanguageChange> LanguageChanges => Set<ConversationLanguageChange>();
     public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
 
     public async Task<ConversationAggregate?> GetAsync(Guid tenantId, Guid conversationId, bool tracking, CancellationToken cancellationToken)
     {
-        IQueryable<ConversationAggregate> query = Conversations.Include(entity => entity.Turns);
+        IQueryable<ConversationAggregate> query = Conversations.Include(entity => entity.Turns).Include(entity => entity.LanguageChanges);
         if (!tracking) query = query.AsNoTracking();
         return await query.SingleOrDefaultAsync(entity => entity.TenantId == new TenantId(tenantId)
             && entity.Id == new ConversationId(conversationId), cancellationToken);
@@ -24,7 +25,7 @@ public sealed class ConversationDbContext(DbContextOptions<ConversationDbContext
 
     public async Task<ConversationAggregate?> GetForCallAsync(Guid tenantId, Guid callId, bool tracking, CancellationToken cancellationToken)
     {
-        IQueryable<ConversationAggregate> query = Conversations.Include(entity => entity.Turns);
+        IQueryable<ConversationAggregate> query = Conversations.Include(entity => entity.Turns).Include(entity => entity.LanguageChanges);
         if (!tracking) query = query.AsNoTracking();
         return await query.SingleOrDefaultAsync(entity => entity.TenantId == new TenantId(tenantId)
             && entity.CallSession == new CallSessionReference(callId), cancellationToken);
@@ -42,6 +43,7 @@ public sealed class ConversationDbContext(DbContextOptions<ConversationDbContext
     {
         ConfigureConversation(modelBuilder.Entity<ConversationAggregate>());
         ConfigureTurn(modelBuilder.Entity<ConversationTurn>());
+        ConfigureLanguageChange(modelBuilder.Entity<ConversationLanguageChange>());
         ConfigureOutbox(modelBuilder.Entity<OutboxMessage>());
     }
 
@@ -56,6 +58,9 @@ public sealed class ConversationDbContext(DbContextOptions<ConversationDbContext
         conversation.Property(entity => entity.CorrelationId).HasConversion(id => id.Value, value => new CorrelationId(value));
         conversation.Property(entity => entity.ConfigurationVersion).HasMaxLength(100).IsRequired();
         conversation.Property(entity => entity.Language).HasMaxLength(35).IsRequired();
+        conversation.Property(entity => entity.StartingLanguage).HasMaxLength(35).HasDefaultValue("en-US").IsRequired();
+        conversation.Property(entity => entity.LanguageReason).HasMaxLength(40).HasDefaultValue("fallback").IsRequired();
+        conversation.Property(entity => entity.LanguageDetectionConfidence).HasPrecision(5, 4);
         conversation.Property(entity => entity.EscalationReason).HasMaxLength(500);
         conversation.Property(entity => entity.Version).IsConcurrencyToken();
         conversation.OwnsOne(entity => entity.Summary, summary =>
@@ -70,8 +75,23 @@ public sealed class ConversationDbContext(DbContextOptions<ConversationDbContext
         });
         conversation.HasMany(entity => entity.Turns).WithOne().HasForeignKey(entity => entity.ConversationId).OnDelete(DeleteBehavior.Cascade);
         conversation.Navigation(entity => entity.Turns).UsePropertyAccessMode(PropertyAccessMode.Field);
+        conversation.HasMany(entity => entity.LanguageChanges).WithOne().HasForeignKey(entity => entity.ConversationId).OnDelete(DeleteBehavior.Cascade);
+        conversation.Navigation(entity => entity.LanguageChanges).UsePropertyAccessMode(PropertyAccessMode.Field);
         conversation.HasIndex(entity => new { entity.TenantId, entity.CallSession }).IsUnique();
         conversation.HasIndex(entity => new { entity.TenantId, entity.LocationId, entity.CreatedAtUtc });
+    }
+
+    private static void ConfigureLanguageChange(EntityTypeBuilder<ConversationLanguageChange> change)
+    {
+        change.ToTable("conversation_language_changes", "conversation");
+        change.HasKey(entity => entity.Id);
+        change.Property(entity => entity.Id).ValueGeneratedNever();
+        change.Property(entity => entity.ConversationId).HasConversion(id => id.Value, value => new ConversationId(value));
+        change.Property(entity => entity.PreviousLanguageCode).HasMaxLength(35).IsRequired();
+        change.Property(entity => entity.LanguageCode).HasMaxLength(35).IsRequired();
+        change.Property(entity => entity.Reason).HasMaxLength(40).IsRequired();
+        change.Property(entity => entity.DetectionConfidence).HasPrecision(5, 4);
+        change.HasIndex(entity => new { entity.ConversationId, entity.Sequence }).IsUnique();
     }
 
     private static void ConfigureTurn(EntityTypeBuilder<ConversationTurn> turn)

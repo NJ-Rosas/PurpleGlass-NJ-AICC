@@ -44,6 +44,30 @@ public sealed class CallSessionTests
         Assert.Equal(CallState.Answered, call.State);
     }
 
+    [Theory]
+    [InlineData("english", "en-US")]
+    [InlineData("es_us", "es-US")]
+    [InlineData("es-pr", "es-PR")]
+    public void OutboundStartingLanguageIsNormalizedAndPersistedWithReason(string input, string expected)
+    {
+        CallSession call = CallSession.RequestOutbound(
+            CallSessionId.New(), new TenantId(Guid.NewGuid()), new LocationId(Guid.NewGuid()), null,
+            "+15550000001", "+15550000002", Guid.NewGuid(), DateTimeOffset.UtcNow,
+            startingLanguageCode: input, startingLanguageReason: "call_override");
+
+        Assert.Equal(expected, call.StartingLanguageCode);
+        Assert.Equal("call_override", call.StartingLanguageReason);
+    }
+
+    [Fact]
+    public void UnsupportedOutboundStartingLanguageIsRejectedBeforeAggregateCreation()
+    {
+        _ = Assert.Throws<ArgumentException>(() => CallSession.RequestOutbound(
+            CallSessionId.New(), new TenantId(Guid.NewGuid()), new LocationId(Guid.NewGuid()), null,
+            "+15550000001", "+15550000002", Guid.NewGuid(), DateTimeOffset.UtcNow,
+            startingLanguageCode: "fr-FR", startingLanguageReason: "call_override"));
+    }
+
     [Fact]
     public void RecordingCannotBeAttachedToActiveCall()
     {

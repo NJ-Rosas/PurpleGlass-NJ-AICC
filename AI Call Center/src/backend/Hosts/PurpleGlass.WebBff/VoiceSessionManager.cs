@@ -49,7 +49,8 @@ public sealed partial class VoiceSessionManager(
             await session.RunAsync(new VoiceSessionIdentity(
                 call.TenantId, call.LocationId, call.CallId, call.Direction,
                 call.Provider, call.ProviderCallId, transport.ProviderMediaStreamId,
-                call.CorrelationId), transport, cancellationToken);
+                call.CorrelationId, call.StartingLanguageCode, call.StartingLanguageReason),
+                transport, cancellationToken);
         }
         finally
         {
@@ -185,6 +186,13 @@ public sealed partial class BffVoiceSessionDiagnostics(ILogger<BffVoiceSessionDi
             diagnostic.Stage, diagnostic.DurationMs, diagnostic.ElapsedFromEndpointMs,
             diagnostic.Adapter, diagnostic.Result);
 
+    public void RecordLanguage(VoiceLanguageDiagnostic diagnostic) =>
+        LogLanguage(logger, diagnostic.CallId, diagnostic.CorrelationId,
+            diagnostic.StartingLanguage, diagnostic.ActiveLanguage, diagnostic.Reason,
+            diagnostic.DetectionResult, diagnostic.ConfidenceBucket,
+            diagnostic.AlternateEvidenceCount, diagnostic.SwitchAccepted,
+            diagnostic.UnsupportedRequest, diagnostic.LanguageVersion);
+
     [LoggerMessage(204, LogLevel.Error,
         "Realtime voice session exception; CallId={CallId}, ConversationId={ConversationId}, TenantId={TenantId}, LocationId={LocationId}, Provider={Provider}, ProviderCallId={ProviderCallId}, CorrelationId={CorrelationId}, Stage={Stage}, SafeCode={SafeCode}, ExceptionType={ExceptionType}, RootExceptionType={RootExceptionType}.")]
     private static partial void LogSessionException(ILogger logger, Guid callId, Guid? conversationId,
@@ -230,6 +238,13 @@ public sealed partial class BffVoiceSessionDiagnostics(ILogger<BffVoiceSessionDi
     private static partial void LogLatency(ILogger logger, Guid callId, Guid? conversationId,
         Guid correlationId, string turnId, string responseId, string stage,
         double durationMs, double elapsedFromEndpointMs, string adapter, string result);
+
+    [LoggerMessage(211, LogLevel.Information,
+        "Call language decision; CallId={CallId}, CorrelationId={CorrelationId}, StartingLanguage={StartingLanguage}, ActiveLanguage={ActiveLanguage}, Reason={Reason}, DetectionResult={DetectionResult}, ConfidenceBucket={ConfidenceBucket}, AlternateEvidenceCount={AlternateEvidenceCount}, SwitchAccepted={SwitchAccepted}, UnsupportedRequest={UnsupportedRequest}, LanguageVersion={LanguageVersion}.")]
+    private static partial void LogLanguage(ILogger logger, Guid callId, Guid correlationId,
+        string startingLanguage, string activeLanguage, string reason, string detectionResult,
+        string confidenceBucket, int alternateEvidenceCount, bool switchAccepted,
+        bool unsupportedRequest, long languageVersion);
 }
 
 public sealed class VoiceSessionConflictException(string code) : Exception("A voice session is already active for this call.")

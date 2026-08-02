@@ -232,17 +232,113 @@ public sealed class WebBffSecurityTests : IClassFixture<SecurityWebApplicationFa
                 locationId = DevelopmentIdentityDirectory.LocationId,
                 idempotencyKey,
                 destinationNumber = "+17875551301",
+                languageCode = "es_pr",
             }),
         };
         request.Headers.Add("X-CSRF-TOKEN", csrf);
         HttpResponseMessage response = await client.SendAsync(request);
-        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+        string responseBody = await response.Content.ReadAsStringAsync();
+        Assert.True(response.StatusCode == HttpStatusCode.Accepted,
+            $"Expected Accepted, received {response.StatusCode}: {responseBody}");
+        using JsonDocument callProjection = JsonDocument.Parse(responseBody);
+        Guid callId = callProjection.RootElement.GetProperty("callId").GetGuid();
         using IServiceScope verificationScope = factory.Services.CreateScope();
         CallManagementDbContext callsDb = verificationScope.ServiceProvider.GetRequiredService<CallManagementDbContext>();
         Assert.True(await callsDb.TelephonyOperations.AnyAsync(operation => operation.TenantId
             == new PurpleGlass.Modules.CallManagement.Domain.TenantId(DevelopmentIdentityDirectory.TenantId)));
+        Assert.True(await callsDb.Calls.AnyAsync(call => call.Id
+            == new PurpleGlass.Modules.CallManagement.Domain.CallSessionId(callId)
+            && call.StartingLanguageCode == "es-PR"
+            && call.StartingLanguageReason == "call_override"));
         TenancyDbContext tenancy = verificationScope.ServiceProvider.GetRequiredService<TenancyDbContext>();
         Assert.True(await tenancy.AuditRecords.AnyAsync(record => record.Action == "OutboundCallRequested"));
+    }
+
+    [Fact]
+    public async Task UnsupportedOutboundLanguageReturnsValidationErrorWithoutCreatingCall()
+    {
+        int callsBefore;
+        using (IServiceScope beforeScope = factory.Services.CreateScope())
+        {
+            CallManagementDbContext calls = beforeScope.ServiceProvider.GetRequiredService<CallManagementDbContext>();
+            callsBefore = await calls.Calls.CountAsync();
+        }
+        using HttpClient client = factory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true });
+        await LoginAsync(client, "administrator");
+        string csrf = await GetCsrfAsync(client);
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/bff/v1/calls/outbound")
+        {
+            Content = JsonContent.Create(new
+            {
+                locationId = DevelopmentIdentityDirectory.LocationId,
+                idempotencyKey = $"invalid-language-{Guid.NewGuid():N}",
+                destinationNumber = "+17875551301",
+                languageCode = "unsupported-free-text",
+            }),
+        };
+        request.Headers.Add("X-CSRF-TOKEN", csrf);
+
+        HttpResponseMessage response = await client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Contains("unsupported_call_language", await response.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+        using IServiceScope afterScope = factory.Services.CreateScope();
+        CallManagementDbContext afterCalls = afterScope.ServiceProvider.GetRequiredService<CallManagementDbContext>();
+        Assert.Equal(callsBefore, await afterCalls.Calls.CountAsync());
+    }
+
+    [Fact]
+    public async Task AdministratorCanNormalizeAndAuditLocationDefaultCallLanguage()
+    {
+        long expectedVersion;
+        using (IServiceScope scope = factory.Services.CreateScope())
+        {
+            CallManagementService calls = scope.ServiceProvider.GetRequiredService<CallManagementService>();
+            _ = await calls.ConfigureTelephonyNumberAsync(new ConfigureTelephonyNumber(
+                DevelopmentIdentityDirectory.TenantId, DevelopmentIdentityDirectory.LocationId,
+                "None", "+17875551300", null, false, true, true), default);
+            TenancyDbContext tenancy = scope.ServiceProvider.GetRequiredService<TenancyDbContext>();
+            expectedVersion = await tenancy.Locations
+                .Where(location => location.Id == new PurpleGlass.Modules.Tenancy.Domain.LocationId(
+                    DevelopmentIdentityDirectory.LocationId))
+                .Select(location => location.Version)
+                .SingleAsync();
+        }
+        using HttpClient client = factory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true });
+        await LoginAsync(client, "administrator");
+        string csrf = await GetCsrfAsync(client);
+        using var request = new HttpRequestMessage(HttpMethod.Put,
+            $"/bff/v1/locations/{DevelopmentIdentityDirectory.LocationId:D}/default-call-language")
+        {
+            Content = JsonContent.Create(new { languageCode = "es_us", expectedVersion }),
+        };
+        request.Headers.Add("X-CSRF-TOKEN", csrf);
+
+        HttpResponseMessage response = await client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using JsonDocument projection = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal("es-US", projection.RootElement.GetProperty("defaultCallLanguageCode").GetString());
+        using var outboundRequest = new HttpRequestMessage(HttpMethod.Post, "/bff/v1/calls/outbound")
+        {
+            Content = JsonContent.Create(new
+            {
+                locationId = DevelopmentIdentityDirectory.LocationId,
+                idempotencyKey = $"location-language-{Guid.NewGuid():N}",
+                destinationNumber = "+17875551301",
+            }),
+        };
+        outboundRequest.Headers.Add("X-CSRF-TOKEN", csrf);
+        HttpResponseMessage outboundResponse = await client.SendAsync(outboundRequest);
+        Assert.Equal(HttpStatusCode.Accepted, outboundResponse.StatusCode);
+        using JsonDocument outboundProjection = JsonDocument.Parse(await outboundResponse.Content.ReadAsStringAsync());
+        Assert.Equal("es-US", outboundProjection.RootElement.GetProperty("startingLanguageCode").GetString());
+        Assert.Equal("location_default", outboundProjection.RootElement.GetProperty("startingLanguageReason").GetString());
+        using IServiceScope verificationScope = factory.Services.CreateScope();
+        TenancyDbContext verification = verificationScope.ServiceProvider.GetRequiredService<TenancyDbContext>();
+        Assert.True(await verification.AuditRecords.AnyAsync(record =>
+            record.Action == "LocationDefaultCallLanguageChanged"
+            && record.LocationId == DevelopmentIdentityDirectory.LocationId));
     }
 
     [Fact]

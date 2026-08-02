@@ -40,6 +40,11 @@ public sealed class ScopedRealtimeConversationPersistence(IServiceScopeFactory s
         CancellationToken cancellationToken) =>
         ExecuteAsync("assistant_turn_persist", service => service.AddAssistantTurnAsync(command, cancellationToken));
 
+    public Task<ConversationStatusProjection> ChangeLanguageAsync(
+        ChangeConversationLanguage command,
+        CancellationToken cancellationToken) =>
+        ExecuteAsync("conversation_language_change", service => service.ChangeLanguageAsync(command, cancellationToken));
+
     public Task<CompletedConversationSummary> CompleteAsync(
         CompleteConversation command,
         CancellationToken cancellationToken) =>

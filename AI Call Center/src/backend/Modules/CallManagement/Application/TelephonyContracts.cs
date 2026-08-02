@@ -47,7 +47,14 @@ public sealed record VoiceCallContext(
     string State,
     string Provider,
     string ProviderCallId,
-    long Version);
+    long Version,
+    string StartingLanguageCode,
+    string StartingLanguageReason);
+
+public interface ILocationCallLanguageResolver
+{
+    Task<string?> ResolveDefaultLanguageAsync(Guid tenantId, Guid locationId, CancellationToken cancellationToken);
+}
 
 public sealed record TelephonyDispatch(
     Guid OperationId,

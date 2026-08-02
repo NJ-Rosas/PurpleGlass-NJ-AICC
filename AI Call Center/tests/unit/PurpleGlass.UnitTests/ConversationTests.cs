@@ -123,6 +123,27 @@ public sealed class ConversationTests
             conversation.AddTurn(turnId, SpeakerRole.Assistant, "Hello back", DateTimeOffset.UtcNow));
     }
 
+    [Fact]
+    public void LanguageChangePreservesConversationAndIsIdempotentByChangeIdentifier()
+    {
+        Conversation conversation = CreateFixture().Conversation;
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        conversation.Activate(now);
+        Guid changeId = Guid.NewGuid();
+
+        ConversationLanguageChange first = conversation.ChangeLanguage(
+            changeId, "es-PR", "caller_explicit_request", now.AddSeconds(1), null);
+        ConversationLanguageChange retry = conversation.ChangeLanguage(
+            changeId, "es-PR", "caller_explicit_request", now.AddSeconds(2), null);
+
+        Assert.Same(first, retry);
+        Assert.Equal("en-US", conversation.StartingLanguage);
+        Assert.Equal("es-PR", conversation.Language);
+        Assert.Equal("caller_explicit_request", conversation.LanguageReason);
+        Assert.Equal(1, conversation.LanguageChangeSequence);
+        Assert.Single(conversation.LanguageChanges);
+    }
+
     private static ConversationFixture CreateFixture()
     {
         var tenantId = new TenantId(Guid.NewGuid());

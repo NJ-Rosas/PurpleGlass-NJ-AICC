@@ -47,7 +47,7 @@ public interface ICallEligibilityQuery
         CancellationToken cancellationToken);
 }
 
-public sealed record StartOutboundCallRequest(string DestinationNumber);
+public sealed record StartOutboundCallRequest(string DestinationNumber, string? LanguageCode = null);
 
 public sealed record TelephonyNumberRequest(
     Guid? LocationId,
@@ -81,4 +81,6 @@ public sealed record CallSummary(
     long Version,
     string Provider = "Synthetic",
     string FromNumber = "",
-    string ToNumber = "");
+    string ToNumber = "",
+    string StartingLanguageCode = "en-US",
+    string StartingLanguageReason = "fallback");

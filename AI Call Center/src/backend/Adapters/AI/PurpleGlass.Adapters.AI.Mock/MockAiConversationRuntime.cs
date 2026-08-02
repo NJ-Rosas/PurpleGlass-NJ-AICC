@@ -21,6 +21,16 @@ public sealed class MockAiConversationRuntime(MockAiOptions options, TimeProvide
 
         string caller = request.CurrentCallerTurn.Trim();
         string normalized = caller.ToLowerInvariant();
+        if (request.Configuration.Language.StartsWith("es", StringComparison.OrdinalIgnoreCase))
+        {
+            if (ContainsAny(normalized, request.SafetyPolicy.UrgentKeywords))
+                return Result(request,
+                    "No puedo dar consejos médicos. Si puede ser una emergencia, comuníquese con los servicios de emergencia locales.",
+                    "urgent-safety", true, "urgent_call", true);
+            return Result(request,
+                "Claro. Puedo ayudarle a recopilar la información para la oficina dental. ¿En qué puedo ayudarle hoy?",
+                "general-intake", false, null, false);
+        }
         if (ContainsAny(normalized, request.SafetyPolicy.UrgentKeywords))
             return Result(request, MedicalSafetyResponse, "urgent-safety", true, "urgent_call", true);
         if (LooksLikePromptInjection(normalized))

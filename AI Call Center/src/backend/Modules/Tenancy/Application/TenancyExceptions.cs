@@ -20,3 +20,9 @@ public sealed class TenancyConcurrencyException : Exception
     {
     }
 }
+
+public sealed class TenancyValidationException(string code, Exception? innerException = null)
+    : Exception("The location setting is invalid.", innerException)
+{
+    public string Code { get; } = code;
+}

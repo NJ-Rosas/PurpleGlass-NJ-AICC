@@ -8,6 +8,7 @@ using PurpleGlass.Modules.Audit.Infrastructure;
 using PurpleGlass.Modules.Tenancy.Application;
 using PurpleGlass.Modules.Tenancy.Contracts;
 using PurpleGlass.Modules.Tenancy.Domain;
+using PurpleGlass.SharedKernel;
 
 namespace PurpleGlass.Modules.Tenancy.Infrastructure;
 
@@ -27,21 +28,35 @@ public sealed class TenancyDbContext(DbContextOptions<TenancyDbContext> options)
         LocationId locationId,
         CancellationToken cancellationToken)
     {
-        return await (
+        var row = await (
             from tenant in Tenants.AsNoTracking()
             join location in Locations.AsNoTracking() on tenant.Id equals location.TenantId
             where tenant.Id == tenantId
                 && location.Id == locationId
                 && tenant.IsActive
                 && location.IsActive
-            select new TenantSummary(
-                tenant.Id.Value,
-                tenant.DisplayName,
-                location.Id.Value,
-                location.DisplayName,
+            select new
+            {
+                TenantId = tenant.Id.Value,
+                TenantDisplayName = tenant.DisplayName,
+                LocationId = location.Id.Value,
+                LocationDisplayName = location.DisplayName,
                 location.TimeZoneId,
-                location.Version))
+                location.DefaultCallLanguageCode,
+                location.Version,
+            })
             .SingleOrDefaultAsync(cancellationToken);
+        return row is null ? null : new TenantSummary(
+            row.TenantId,
+            row.TenantDisplayName,
+            row.LocationId,
+            row.LocationDisplayName,
+            row.TimeZoneId,
+            row.DefaultCallLanguageCode,
+            SupportedCallLanguages.All
+                .Select(item => new SupportedCallLanguageSummary(item.Code, item.DisplayName))
+                .ToArray(),
+            row.Version);
     }
 
     public Task<Location?> GetLocationAsync(
@@ -98,6 +113,8 @@ public sealed class TenancyDbContext(DbContextOptions<TenancyDbContext> options)
             .HasConversion(id => id.Value, value => new TenantId(value));
         location.Property(entity => entity.DisplayName).HasMaxLength(160).IsRequired();
         location.Property(entity => entity.TimeZoneId).HasMaxLength(100).IsRequired();
+        location.Property(entity => entity.DefaultCallLanguageCode).HasMaxLength(35)
+            .HasDefaultValue(SupportedCallLanguages.SystemFallbackCode).IsRequired();
         location.Property(entity => entity.Version).IsConcurrencyToken();
         location.HasIndex(entity => new { entity.TenantId, entity.Id }).IsUnique();
     }

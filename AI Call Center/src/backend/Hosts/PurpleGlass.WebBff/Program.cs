@@ -147,6 +147,7 @@ if (builder.Environment.IsDevelopment() && security.DevelopmentOrigins.Length > 
 builder.Services.AddTenancyInfrastructure(connectionString);
 builder.Services.AddScoped<SecurityAuditService>();
 builder.Services.AddScoped<TenancyService>();
+builder.Services.AddSingleton<ILocationCallLanguageResolver, ScopedLocationCallLanguageResolver>();
 builder.Services.AddCallManagementInfrastructure(connectionString);
 builder.Services.AddConversationInfrastructure(connectionString);
 builder.Services.AddEventingInfrastructure(connectionString);
@@ -431,6 +432,13 @@ protectedBff.MapPut("/locations/{locationId:guid}/display-name", async (
     await antiforgery.ValidateRequestAsync(context);
     return Results.Ok(await service.UpdateLocationDisplayNameAsync(locationId, request, cancellationToken));
 }).RequireAuthorization(SecurityPolicies.ManageLocation).RequireRateLimiting("security");
+protectedBff.MapPut("/locations/{locationId:guid}/default-call-language", async (
+    Guid locationId, UpdateLocationDefaultCallLanguageRequest request, HttpContext context, IAntiforgery antiforgery,
+    TenancyService service, CancellationToken cancellationToken) =>
+{
+    await antiforgery.ValidateRequestAsync(context);
+    return Results.Ok(await service.UpdateLocationDefaultCallLanguageAsync(locationId, request, cancellationToken));
+}).RequireAuthorization(SecurityPolicies.ManageLocation).RequireRateLimiting("security");
 protectedBff.MapGet("/calls", async (TrustedRequestContextAccessor accessor, CallManagementService calls,
     int? limit, CancellationToken cancellationToken) =>
 {
@@ -456,7 +464,7 @@ protectedBff.MapPost("/calls/outbound", async (OutboundTransportRequest request,
     await workerRuntime.EnsureReadyAsync(cancellationToken);
     CallSummary call = await calls.RequestTransportOutboundAsync(new RequestTransportOutboundCall(
         context.TenantId, request.LocationId, request.IdempotencyKey,
-        request.DestinationNumber, context.CorrelationId), cancellationToken);
+        request.DestinationNumber, context.CorrelationId, LanguageCode: request.LanguageCode), cancellationToken);
     await audit.WriteAsync(context.TenantId, request.LocationId, context.ActorId, "OutboundCallRequested",
         "CallSession", call.CallId.ToString("D"), "Allowed", "telephony_transport", context.CorrelationId, cancellationToken);
     return Results.Accepted($"/bff/v1/calls/{call.CallId:D}", call);
@@ -709,7 +717,8 @@ public partial class Program;
 namespace PurpleGlass.WebBff
 {
     public sealed record DevelopmentLoginRequest(string User);
-    public sealed record OutboundTransportRequest(Guid LocationId, string IdempotencyKey, string DestinationNumber);
+    public sealed record OutboundTransportRequest(Guid LocationId, string IdempotencyKey, string DestinationNumber,
+        string? LanguageCode = null);
     public sealed record DeadLetterListRequest(
         Guid? LocationId, string? MessageType, string? FailureCategory,
         DateTimeOffset? FromUtc, DateTimeOffset? ToUtc, Guid? MessageId,
@@ -737,11 +746,13 @@ namespace PurpleGlass.WebBff
                 AntiforgeryValidationException => (400, "CSRF validation failed", "csrf_validation_failed"),
                 TenancyResourceNotFoundException => (404, "Resource not found", "resource_not_found"),
                 TenancyConcurrencyException => (409, "Resource changed", "concurrency_conflict"),
+                TenancyValidationException validation => (400, "Location setting is invalid", validation.Code),
                 CallApplicationException { Code: "call_not_found" } => (404, "Resource not found", "resource_not_found"),
                 CallApplicationException { Code: "telephony_route_not_found" or "telephony_location_required" } => (404, "Telephony route not found", "telephony_route_not_found"),
                 CallApplicationException { Code: "telephony_number_unavailable" or "provider_identity_unavailable" } => (409, "Telephony is unavailable", exception is CallApplicationException callException ? callException.Code : "telephony_unavailable"),
                 CallApplicationException { Code: "telephony_runtime_unavailable" } => (503, "Telephony runtime is unavailable", "telephony_runtime_unavailable"),
                 CallApplicationException { Code: "idempotency_conflict" or "call_concurrency_conflict" } => (409, "Call request conflicted", exception is CallApplicationException conflict ? conflict.Code : "call_conflict"),
+                CallApplicationException { Code: "unsupported_call_language" } => (400, "Call language is unsupported", "unsupported_call_language"),
                 ConversationApplicationException { Code: "conversation_not_found" } => (404, "Resource not found", "resource_not_found"),
                 ArgumentException => (400, "Invalid request", "invalid_request"),
                 _ => (500, "An unexpected error occurred", "unexpected_error")

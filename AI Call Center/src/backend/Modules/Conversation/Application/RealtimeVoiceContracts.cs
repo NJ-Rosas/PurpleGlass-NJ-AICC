@@ -19,7 +19,9 @@ public sealed record VoiceSessionIdentity(
     string Provider,
     string ProviderCallId,
     string ProviderMediaStreamId,
-    Guid CorrelationId);
+    Guid CorrelationId,
+    string StartingLanguageCode = "en-US",
+    string StartingLanguageReason = "fallback");
 
 public sealed record RealtimeAudioFrame(
     long Sequence,

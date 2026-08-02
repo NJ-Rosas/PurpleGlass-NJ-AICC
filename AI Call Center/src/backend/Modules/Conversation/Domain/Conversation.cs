@@ -1,8 +1,11 @@
+using PurpleGlass.SharedKernel;
+
 namespace PurpleGlass.Modules.Conversation.Domain;
 
 public sealed class Conversation
 {
     private readonly List<ConversationTurn> turns = [];
+    private readonly List<ConversationLanguageChange> languageChanges = [];
 
     private Conversation()
     {
@@ -16,7 +19,8 @@ public sealed class Conversation
         CorrelationId correlationId,
         string configurationVersion,
         string language,
-        DateTimeOffset createdAtUtc)
+        DateTimeOffset createdAtUtc,
+        string languageReason = "fallback")
     {
         ValidateIdentifier(id.Value, nameof(id));
         ValidateIdentifier(callSession.Value, nameof(callSession));
@@ -30,7 +34,10 @@ public sealed class Conversation
         LocationId = locationId;
         CorrelationId = correlationId;
         ConfigurationVersion = RequireValue(configurationVersion, nameof(configurationVersion), 100);
-        Language = RequireValue(language, nameof(language), 35);
+        Language = SupportedCallLanguages.Require(language, nameof(language)).Code;
+        StartingLanguage = Language;
+        LanguageReason = RequireValue(languageReason, nameof(languageReason), 40);
+        LanguageChangedAtUtc = createdAtUtc;
         CreatedAtUtc = createdAtUtc;
         State = ConversationState.Created;
         Version = 1;
@@ -49,6 +56,16 @@ public sealed class Conversation
     public string ConfigurationVersion { get; private set; } = string.Empty;
 
     public string Language { get; private set; } = string.Empty;
+
+    public string StartingLanguage { get; private set; } = string.Empty;
+
+    public string LanguageReason { get; private set; } = string.Empty;
+
+    public DateTimeOffset LanguageChangedAtUtc { get; private set; }
+
+    public decimal? LanguageDetectionConfidence { get; private set; }
+
+    public long LanguageChangeSequence { get; private set; }
 
     public ConversationState State { get; private set; }
 
@@ -69,6 +86,29 @@ public sealed class Conversation
     public long Version { get; private set; }
 
     public IReadOnlyList<ConversationTurn> Turns => turns;
+
+    public IReadOnlyList<ConversationLanguageChange> LanguageChanges => languageChanges;
+
+    public ConversationLanguageChange ChangeLanguage(Guid changeId, string languageCode, string reason,
+        DateTimeOffset changedAtUtc, decimal? detectionConfidence)
+    {
+        EnsureState(ConversationState.Active);
+        ConversationLanguageChange? existing = languageChanges.SingleOrDefault(change => change.Id == changeId);
+        if (existing is not null) return existing;
+        string normalized = SupportedCallLanguages.Require(languageCode, nameof(languageCode)).Code;
+        if (Language.Equals(normalized, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("The requested language is already active.");
+        var change = new ConversationLanguageChange(changeId, Id, LanguageChangeSequence + 1,
+            Language, normalized, reason, changedAtUtc, detectionConfidence);
+        languageChanges.Add(change);
+        Language = normalized;
+        LanguageReason = reason;
+        LanguageChangedAtUtc = changedAtUtc;
+        LanguageDetectionConfidence = detectionConfidence;
+        LanguageChangeSequence++;
+        Version++;
+        return change;
+    }
 
     public void Activate(DateTimeOffset startedAtUtc)
     {

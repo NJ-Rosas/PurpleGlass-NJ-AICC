@@ -17,7 +17,20 @@ public sealed record ConversationStatusProjection(
     string State,
     string Language,
     bool Escalated,
-    long Version);
+    long Version,
+    string StartingLanguage = "en-US",
+    string LanguageReason = "fallback",
+    DateTimeOffset? LanguageChangedAtUtc = null,
+    long LanguageChangeSequence = 0);
+
+public sealed record ConversationLanguageChangeProjection(
+    Guid ChangeId,
+    long Sequence,
+    string PreviousLanguageCode,
+    string LanguageCode,
+    string Reason,
+    decimal? DetectionConfidence,
+    DateTimeOffset ChangedAtUtc);
 
 public sealed record CompletedConversationSummary(
     Guid ConversationId,
@@ -37,4 +50,5 @@ public sealed record ConversationDetails(
     bool Escalated,
     string? EscalationReason,
     IReadOnlyList<LiveTranscriptTurn> Transcript,
-    CompletedConversationSummary? Summary);
+    CompletedConversationSummary? Summary,
+    IReadOnlyList<ConversationLanguageChangeProjection>? LanguageChanges = null);

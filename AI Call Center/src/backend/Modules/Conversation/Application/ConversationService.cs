@@ -14,7 +14,8 @@ public sealed class ConversationService(IConversationStore store, ICallEligibili
         ConversationAggregate? existing = await store.GetForCallAsync(command.TenantId, command.CallId, false, cancellationToken);
         if (existing is not null)
         {
-            if (existing.LocationId.Value != command.LocationId || existing.ConfigurationVersion != command.ConfigurationVersion || existing.Language != command.Language.Trim())
+            if (existing.LocationId.Value != command.LocationId || existing.ConfigurationVersion != command.ConfigurationVersion
+                || existing.StartingLanguage != command.Language.Trim())
                 throw ConversationApplicationException.IdempotencyConflict();
             return Status(existing);
         }
@@ -28,7 +29,7 @@ public sealed class ConversationService(IConversationStore store, ICallEligibili
         var conversation = new ConversationAggregate(
             ConversationId.New(), new CallSessionReference(command.CallId), new TenantId(command.TenantId),
             new LocationId(command.LocationId), new CorrelationId(command.CorrelationId),
-            command.ConfigurationVersion, command.Language, timeProvider.GetUtcNow());
+            command.ConfigurationVersion, command.Language, timeProvider.GetUtcNow(), command.LanguageReason);
         store.Add(conversation);
         await SaveAsync(cancellationToken);
         return Status(conversation);
@@ -52,6 +53,34 @@ public sealed class ConversationService(IConversationStore store, ICallEligibili
 
     public Task<LiveTranscriptTurn> AddAssistantTurnAsync(AddConversationTurn command, CancellationToken cancellationToken) =>
         AddTurnAsync(command, SpeakerRole.Assistant, cancellationToken);
+
+    public async Task<ConversationStatusProjection> ChangeLanguageAsync(
+        ChangeConversationLanguage command, CancellationToken cancellationToken)
+    {
+        ConversationAggregate conversation = await store.GetAsync(
+            command.TenantId, command.ConversationId, true, cancellationToken)
+            ?? throw ConversationApplicationException.NotFound();
+        ConversationLanguageChange? existing = conversation.LanguageChanges.SingleOrDefault(change => change.Id == command.ChangeId);
+        if (existing is not null) return Status(conversation);
+        EnsureVersion(conversation, command.ExpectedVersion);
+        DateTimeOffset now = timeProvider.GetUtcNow();
+        ConversationLanguageChange change;
+        try
+        {
+            change = conversation.ChangeLanguage(command.ChangeId, command.LanguageCode,
+                CallLanguageReasons.Normalize(command.Reason), now, command.DetectionConfidence);
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or ArgumentException)
+        {
+            throw ConversationApplicationException.InvalidState(exception);
+        }
+        AddEvent(conversation, new ConversationLanguageChanged(
+            conversation.Id.Value, change.Sequence, change.PreviousLanguageCode,
+            change.LanguageCode, change.Reason, change.DetectionConfidence, change.ChangedAtUtc),
+            nameof(ConversationLanguageChanged), now, command.CausationId, command.TraceId);
+        await SaveAsync(cancellationToken);
+        return Status(conversation);
+    }
 
     public async Task<ConversationStatusProjection> RecordEscalationAsync(RecordConversationEscalation command, CancellationToken cancellationToken)
     {
@@ -113,7 +142,8 @@ public sealed class ConversationService(IConversationStore store, ICallEligibili
                 conversation.Escalated,
                 conversation.EscalationReason,
                 MapTranscript(conversation),
-                conversation.Summary is null ? null : Completed(conversation));
+                conversation.Summary is null ? null : Completed(conversation),
+                conversation.LanguageChanges.Select(LanguageChange).ToArray());
     }
 
     private async Task<LiveTranscriptTurn> AddTurnAsync(AddConversationTurn command, SpeakerRole speaker, CancellationToken cancellationToken)
@@ -157,7 +187,12 @@ public sealed class ConversationService(IConversationStore store, ICallEligibili
     private async Task SaveAsync(CancellationToken cancellationToken) { try { await store.SaveChangesAsync(cancellationToken); } catch (ConversationPersistenceConcurrencyException e) { throw ConversationApplicationException.Concurrency(e); } }
     private static void Apply(Action action) { try { action(); } catch (InvalidOperationException e) { throw ConversationApplicationException.InvalidState(e); } }
     private static string ToTopic(string value) => string.Concat(value.Select((c, i) => char.IsUpper(c) && i > 0 ? $"-{char.ToLowerInvariant(c)}" : char.ToLowerInvariant(c).ToString()));
-    private static ConversationStatusProjection Status(ConversationAggregate c) => new(c.Id.Value, c.CallSession.Value, c.State.ToString(), c.Language, c.Escalated, c.Version);
+    private static ConversationStatusProjection Status(ConversationAggregate c) => new(
+        c.Id.Value, c.CallSession.Value, c.State.ToString(), c.Language, c.Escalated, c.Version,
+        c.StartingLanguage, c.LanguageReason, c.LanguageChangedAtUtc, c.LanguageChangeSequence);
+    private static ConversationLanguageChangeProjection LanguageChange(ConversationLanguageChange change) => new(
+        change.Id, change.Sequence, change.PreviousLanguageCode, change.LanguageCode,
+        change.Reason, change.DetectionConfidence, change.ChangedAtUtc);
     private static LiveTranscriptTurn Turn(ConversationTurn t, Guid callId = default) => new(t.ConversationId.Value, callId, t.Id.Value, t.Speaker.ToString(), t.SequenceNumber, t.Text, t.CreatedAtUtc, t.SafetyFlagged, t.EscalationFlagged);
     private static LiveTranscriptTurn[] MapTranscript(ConversationAggregate c) => c.Turns.Select(t => Turn(t, c.CallSession.Value)).ToArray();
     private static CompletedConversationSummary Completed(ConversationAggregate c) { ConversationSummary s = c.Summary ?? throw ConversationApplicationException.InvalidState(new InvalidOperationException()); return new(c.Id.Value, c.CallSession.Value, s.Text, s.CallerIntent, s.Outcome, s.FollowUpRequired, s.Escalated, s.GeneratedAtUtc); }

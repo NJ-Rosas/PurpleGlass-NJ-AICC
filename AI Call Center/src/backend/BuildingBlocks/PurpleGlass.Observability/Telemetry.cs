@@ -46,6 +46,11 @@ public static class PurpleGlassTelemetry
     public static readonly Histogram<double> VoiceTotalTurnLatency = Meter.CreateHistogram<double>("purpleglass.voice.turn.total_latency", "ms");
     public static readonly Counter<long> VoiceInterruptions = Meter.CreateCounter<long>("purpleglass.voice.interruptions");
     public static readonly Counter<long> VoiceFailures = Meter.CreateCounter<long>("purpleglass.voice.failures");
+    public static readonly Counter<long> VoiceCallsByStartingLanguage = Meter.CreateCounter<long>("purpleglass.voice.language.starts");
+    public static readonly Counter<long> VoiceExplicitLanguageSwitches = Meter.CreateCounter<long>("purpleglass.voice.language.switches.explicit");
+    public static readonly Counter<long> VoiceAutomaticLanguageSwitches = Meter.CreateCounter<long>("purpleglass.voice.language.switches.automatic");
+    public static readonly Counter<long> VoiceLanguageSwitchesRejected = Meter.CreateCounter<long>("purpleglass.voice.language.switches.rejected");
+    public static readonly Counter<long> VoiceUnsupportedLanguageRequests = Meter.CreateCounter<long>("purpleglass.voice.language.unsupported_requests");
     public static readonly Counter<long> OutboxLeased = Meter.CreateCounter<long>("purpleglass.outbox.leased");
     public static readonly Counter<long> OutboxLeaseRecovered = Meter.CreateCounter<long>("purpleglass.outbox.lease_recovered");
     public static readonly Histogram<double> OutboxAge = Meter.CreateHistogram<double>("purpleglass.outbox.age", "s");

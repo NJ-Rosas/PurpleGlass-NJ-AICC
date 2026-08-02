@@ -2,10 +2,15 @@ using System.Text.Json;
 using PurpleGlass.Eventing;
 using PurpleGlass.Modules.CallManagement.Contracts;
 using PurpleGlass.Modules.CallManagement.Domain;
+using PurpleGlass.SharedKernel;
 
 namespace PurpleGlass.Modules.CallManagement.Application;
 
-public sealed class CallManagementService(ICallStore store, TimeProvider timeProvider, ITelephonyStore? telephonyStore = null) : ICallEligibilityQuery
+public sealed class CallManagementService(
+    ICallStore store,
+    TimeProvider timeProvider,
+    ITelephonyStore? telephonyStore = null,
+    ILocationCallLanguageResolver? locationLanguageResolver = null) : ICallEligibilityQuery
 {
     private ITelephonyStore Telephony => telephonyStore ?? store as ITelephonyStore
         ?? throw new CallApplicationException("telephony_store_unavailable", "Telephony persistence is not available.");
@@ -21,7 +26,8 @@ public sealed class CallManagementService(ICallStore store, TimeProvider timePro
         CallSession call = CallSession.ReceiveInbound(
             CallSessionId.New(), new TenantId(command.TenantId), new LocationId(command.LocationId),
             command.ProviderCallId, PhoneNumber.Normalize(command.FromNumber),
-            PhoneNumber.Normalize(command.ToNumber), command.CorrelationId, now, command.Provider);
+            PhoneNumber.Normalize(command.ToNumber), command.CorrelationId, now, command.Provider,
+            command.StartingLanguageCode, command.StartingLanguageReason);
         store.Add(call);
         AddEvent(call, new CallReceived(call.Id.Value, "Inbound", now), nameof(CallReceived), now, command.CausationId, command.TraceId);
         await SaveAsync(cancellationToken);
@@ -45,7 +51,8 @@ public sealed class CallManagementService(ICallStore store, TimeProvider timePro
         CallSession call = CallSession.RequestOutbound(
             CallSessionId.New(), new TenantId(command.TenantId), new LocationId(command.LocationId),
             null, PhoneNumber.Normalize(command.FromNumber),
-            PhoneNumber.Normalize(command.ToNumber), command.CorrelationId, now, command.Provider);
+            PhoneNumber.Normalize(command.ToNumber), command.CorrelationId, now, command.Provider,
+            command.StartingLanguageCode, command.StartingLanguageReason);
         store.Add(call);
         store.AddOutboundRequest(command.TenantId, RequireKey(command.IdempotencyKey), call.Id.Value, now);
         AddEvent(call, new OutboundCallRequested(call.Id.Value, now), nameof(OutboundCallRequested), now, command.CausationId, command.TraceId);
@@ -56,10 +63,13 @@ public sealed class CallManagementService(ICallStore store, TimeProvider timePro
     public async Task<CallSummary> RequestTransportOutboundAsync(RequestTransportOutboundCall command, CancellationToken cancellationToken)
     {
         string destination = PhoneNumber.Normalize(command.DestinationNumber);
+        (string startingLanguage, string languageReason) = await ResolveStartingLanguageAsync(
+            command.TenantId, command.LocationId, command.LanguageCode, cancellationToken);
         CallSession? existing = await store.GetByOutboundKeyAsync(command.TenantId, command.IdempotencyKey, cancellationToken);
         if (existing is not null)
         {
-            if (existing.ToNumber != destination) throw CallApplicationException.IdempotencyConflict();
+            if (existing.ToNumber != destination || existing.StartingLanguageCode != startingLanguage)
+                throw CallApplicationException.IdempotencyConflict();
             return Map(existing);
         }
 
@@ -68,7 +78,8 @@ public sealed class CallManagementService(ICallStore store, TimeProvider timePro
         DateTimeOffset now = timeProvider.GetUtcNow();
         CallSession call = CallSession.RequestOutbound(
             CallSessionId.New(), new TenantId(command.TenantId), new LocationId(command.LocationId),
-            null, source.NormalizedNumber, destination, command.CorrelationId, now, source.Provider);
+            null, source.NormalizedNumber, destination, command.CorrelationId, now, source.Provider,
+            startingLanguage, languageReason);
         store.Add(call);
         store.AddOutboundRequest(command.TenantId, RequireKey(command.IdempotencyKey), call.Id.Value, now);
         Telephony.Add(new TelephonyOperation(Guid.NewGuid(), call.TenantId, call.LocationId, call.Id,
@@ -90,9 +101,12 @@ public sealed class CallManagementService(ICallStore store, TimeProvider timePro
         if (route.LocationId is null)
             throw new CallApplicationException("telephony_location_required", "The destination telephone number is not assigned to a location.");
 
+        (string startingLanguage, string languageReason) = await ResolveStartingLanguageAsync(
+            route.TenantId.Value, route.LocationId.Value.Value, null, cancellationToken);
         CallSummary call = await RegisterInboundAsync(new RegisterInboundCall(
             route.TenantId.Value, route.LocationId.Value.Value, providerCallId,
-            PhoneNumber.Normalize(fromNumber), normalizedTo, correlationId, Provider: provider), cancellationToken);
+            PhoneNumber.Normalize(fromNumber), normalizedTo, correlationId, Provider: provider,
+            StartingLanguageCode: startingLanguage, StartingLanguageReason: languageReason), cancellationToken);
         if (!string.IsNullOrWhiteSpace(providerParentCallId))
         {
             call = await AssignProviderIdentityAsync(new AssignProviderCallIdentity(
@@ -420,12 +434,29 @@ public sealed class CallManagementService(ICallStore store, TimeProvider timePro
     private static string RequireKey(string value) => string.IsNullOrWhiteSpace(value) || value.Length > 200
         ? throw new CallApplicationException("invalid_idempotency_key", "A bounded idempotency key is required.") : value.Trim();
     private static string ToTopic(string value) => string.Concat(value.Select((c, i) => char.IsUpper(c) && i > 0 ? $"-{char.ToLowerInvariant(c)}" : char.ToLowerInvariant(c).ToString()));
-    private static CallSummary Map(CallSession call) => new(call.Id.Value, call.Direction.ToString(), call.State.ToString(), call.CreatedAtUtc, call.CompletedAtUtc, call.Outcome, null, call.RecordingReference, call.Version, call.Provider, call.FromNumber, call.ToNumber);
+    private async Task<(string Code, string Reason)> ResolveStartingLanguageAsync(
+        Guid tenantId, Guid locationId, string? overrideCode, CancellationToken cancellationToken)
+    {
+        if (!string.IsNullOrWhiteSpace(overrideCode))
+        {
+            if (!SupportedCallLanguages.TryNormalize(overrideCode, out SupportedCallLanguage language))
+                throw new CallApplicationException("unsupported_call_language", "The requested call language is not supported.");
+            return (language.Code, "call_override");
+        }
+        string? configured = locationLanguageResolver is null
+            ? null
+            : await locationLanguageResolver.ResolveDefaultLanguageAsync(tenantId, locationId, cancellationToken);
+        if (SupportedCallLanguages.TryNormalize(configured, out SupportedCallLanguage locationLanguage))
+            return (locationLanguage.Code, "location_default");
+        return (SupportedCallLanguages.SystemFallbackCode, "fallback");
+    }
+
+    private static CallSummary Map(CallSession call) => new(call.Id.Value, call.Direction.ToString(), call.State.ToString(), call.CreatedAtUtc, call.CompletedAtUtc, call.Outcome, null, call.RecordingReference, call.Version, call.Provider, call.FromNumber, call.ToNumber, call.StartingLanguageCode, call.StartingLanguageReason);
     private static VoiceCallContext MapVoiceContext(CallSession call) => new(
         call.Id.Value, call.TenantId.Value, call.LocationId.Value, call.CorrelationId,
         call.Direction.ToString(), call.State.ToString(), call.Provider,
         call.ProviderCallId ?? throw new CallApplicationException("provider_identity_unavailable", "The provider call identity is unavailable."),
-        call.Version);
+        call.Version, call.StartingLanguageCode, call.StartingLanguageReason);
     private static TelephonyNumberSummary Map(TelephonyNumber number) => new(number.Id, number.TenantId.Value,
         number.LocationId?.Value, number.Provider, number.NormalizedNumber, number.InboundEnabled,
         number.OutboundEnabled, number.IsActive, number.Version);

@@ -19,8 +19,12 @@ export interface TenantSummary {
   locationId: string
   locationDisplayName: string
   timeZoneId: string
+  defaultCallLanguageCode: string
+  supportedCallLanguages: SupportedCallLanguage[]
   version: number
 }
+
+export interface SupportedCallLanguage { code: string; displayName: string }
 
 export interface CallSummary {
   callId: string
@@ -141,10 +145,14 @@ export const prototypeApi = createApi({
       query: ({ locationId, ...body }) => ({ url: `/locations/${locationId}/display-name`, method: 'PUT', body }),
       invalidatesTags: ['TenantSummary'],
     }),
+    updateLocationDefaultCallLanguage: builder.mutation<TenantSummary, { locationId: string; languageCode: string; expectedVersion: number }>({
+      query: ({ locationId, ...body }) => ({ url: `/locations/${locationId}/default-call-language`, method: 'PUT', body }),
+      invalidatesTags: ['TenantSummary'],
+    }),
     getCalls: builder.query<CallSummary[], void>({ query: () => '/calls?limit=20', providesTags: ['Calls'] }),
     getCallDetails: builder.query<CallDetails, string>({ query: (callId) => `/calls/${callId}`, providesTags: ['Calls'] }),
     getTelephonyStatus: builder.query<TelephonyStatus, void>({ query: () => '/telephony/status' }),
-    startOutboundCall: builder.mutation<CallSummary, { locationId: string; destinationNumber: string; idempotencyKey: string }>({
+    startOutboundCall: builder.mutation<CallSummary, { locationId: string; destinationNumber: string; idempotencyKey: string; languageCode?: string }>({
       query: (body) => ({ url: '/calls/outbound', method: 'POST', body }),
       invalidatesTags: ['Calls'],
     }),
@@ -170,6 +178,7 @@ export const prototypeApi = createApi({
 export const {
   useGetSessionQuery, useDevelopmentLoginMutation, useLogoutMutation,
   useGetTenantSummaryQuery, useUpdateLocationNameMutation, useGetCallsQuery, useGetCallDetailsQuery,
+  useUpdateLocationDefaultCallLanguageMutation,
   useGetTelephonyStatusQuery, useStartOutboundCallMutation, useHangupCallMutation,
   useGetDeadLettersQuery, useGetDeadLetterQuery, useRetryDeadLetterMutation,
 } = prototypeApi

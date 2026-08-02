@@ -37,6 +37,30 @@ public sealed class LocationTests
         _ = Assert.Throws<ArgumentException>(() => location.Rename(displayName));
     }
 
+    [Fact]
+    public void ExistingLocationDefaultsToEnglishCallLanguage()
+    {
+        Assert.Equal("en-US", CreateLocation().DefaultCallLanguageCode);
+    }
+
+    [Fact]
+    public void DefaultCallLanguageNormalizesAndUsesLocationVersion()
+    {
+        Location location = CreateLocation();
+
+        Assert.True(location.ChangeDefaultCallLanguage("es_pr"));
+        Assert.Equal("es-PR", location.DefaultCallLanguageCode);
+        Assert.Equal(2, location.Version);
+        Assert.False(location.ChangeDefaultCallLanguage("es-PR"));
+        Assert.Equal(2, location.Version);
+    }
+
+    [Fact]
+    public void UnsupportedDefaultCallLanguageIsRejected()
+    {
+        _ = Assert.Throws<ArgumentException>(() => CreateLocation().ChangeDefaultCallLanguage("fr-FR"));
+    }
+
     private static Location CreateLocation() => new(
         new LocationId(Guid.NewGuid()),
         new TenantId(Guid.NewGuid()),

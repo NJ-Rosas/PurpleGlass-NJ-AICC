@@ -1,3 +1,5 @@
+using PurpleGlass.SharedKernel;
+
 namespace PurpleGlass.Modules.CallManagement.Domain;
 
 public sealed class CallSession
@@ -16,7 +18,9 @@ public sealed class CallSession
         string fromNumber,
         string toNumber,
         Guid correlationId,
-        DateTimeOffset createdAtUtc)
+        DateTimeOffset createdAtUtc,
+        string startingLanguageCode,
+        string startingLanguageReason)
     {
         if (tenantId.Value == Guid.Empty)
         {
@@ -40,6 +44,8 @@ public sealed class CallSession
         ToNumber = RequireValue(toNumber, nameof(toNumber), 32);
         CorrelationId = correlationId == Guid.Empty ? Guid.NewGuid() : correlationId;
         CreatedAtUtc = createdAtUtc;
+        StartingLanguageCode = SupportedCallLanguages.Require(startingLanguageCode, nameof(startingLanguageCode)).Code;
+        StartingLanguageReason = RequireValue(startingLanguageReason, nameof(startingLanguageReason), 40);
         State = direction == CallDirection.Inbound ? CallState.Received : CallState.Requested;
         Version = 1;
     }
@@ -67,6 +73,10 @@ public sealed class CallSession
     public Guid CorrelationId { get; private set; }
 
     public DateTimeOffset CreatedAtUtc { get; private set; }
+
+    public string StartingLanguageCode { get; private set; } = SupportedCallLanguages.SystemFallbackCode;
+
+    public string StartingLanguageReason { get; private set; } = "fallback";
 
     public DateTimeOffset? AnsweredAtUtc { get; private set; }
 
@@ -103,8 +113,11 @@ public sealed class CallSession
         string toNumber,
         Guid correlationId,
         DateTimeOffset receivedAtUtc,
-        string provider = "Synthetic") =>
-        new(id, tenantId, locationId, CallDirection.Inbound, provider, providerCallId, fromNumber, toNumber, correlationId, receivedAtUtc);
+        string provider = "Synthetic",
+        string startingLanguageCode = SupportedCallLanguages.SystemFallbackCode,
+        string startingLanguageReason = "fallback") =>
+        new(id, tenantId, locationId, CallDirection.Inbound, provider, providerCallId, fromNumber, toNumber,
+            correlationId, receivedAtUtc, startingLanguageCode, startingLanguageReason);
 
     public static CallSession RequestOutbound(
         CallSessionId id,
@@ -115,8 +128,11 @@ public sealed class CallSession
         string toNumber,
         Guid correlationId,
         DateTimeOffset requestedAtUtc,
-        string provider = "Synthetic") =>
-        new(id, tenantId, locationId, CallDirection.Outbound, provider, providerCallId, fromNumber, toNumber, correlationId, requestedAtUtc);
+        string provider = "Synthetic",
+        string startingLanguageCode = SupportedCallLanguages.SystemFallbackCode,
+        string startingLanguageReason = "fallback") =>
+        new(id, tenantId, locationId, CallDirection.Outbound, provider, providerCallId, fromNumber, toNumber,
+            correlationId, requestedAtUtc, startingLanguageCode, startingLanguageReason);
 
     public void AssignProviderIdentity(string providerCallId, string? providerParentCallId = null)
     {

@@ -6,6 +6,7 @@ using System.Collections.Concurrent;
 using PurpleGlass.Modules.Conversation.Contracts;
 using PurpleGlass.Modules.Conversation.Domain;
 using PurpleGlass.Observability;
+using PurpleGlass.SharedKernel;
 
 namespace PurpleGlass.Modules.Conversation.Application;
 
@@ -19,7 +20,6 @@ public sealed class RealtimeVoiceSession(
     TimeProvider timeProvider,
     IVoiceSessionDiagnostics diagnostics)
 {
-    private const string FallbackResponse = "I'm sorry, I'm having trouble responding right now.";
     private readonly object synchronization = new();
     private CancellationTokenSource? sessionSource;
     private CancellationTokenSource? activeOperation;
@@ -36,6 +36,7 @@ public sealed class RealtimeVoiceSession(
     private bool stopRequested;
     private int started;
     private readonly ConcurrentDictionary<Guid, long> endpointTimestamps = new();
+    private CallLanguageState? languageState;
 
     public VoiceSessionState State
     {
@@ -68,6 +69,9 @@ public sealed class RealtimeVoiceSession(
         ValidateIdentity(sessionIdentity, audioTransport);
         identity = sessionIdentity;
         transport = audioTransport;
+        languageState = new CallLanguageState(
+            sessionIdentity.StartingLanguageCode, sessionIdentity.StartingLanguageReason,
+            timeProvider.GetUtcNow(), options.LanguagePolicy);
         var source = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         source.CancelAfter(options.Conversation.MaximumDuration);
         bool cancelImmediately;
@@ -81,7 +85,11 @@ public sealed class RealtimeVoiceSession(
         using Activity? sessionActivity = PurpleGlassTelemetry.Calls.StartActivity("voice.session", ActivityKind.Internal);
         sessionActivity?.SetTag("voice.provider", sessionIdentity.Provider);
         sessionActivity?.SetTag("voice.direction", sessionIdentity.Direction);
-        sessionActivity?.SetTag("voice.language", options.Conversation.Language);
+        sessionActivity?.SetTag("voice.language", ActiveLanguage);
+        sessionActivity?.SetTag("voice.language_reason", languageState.Reason);
+        PurpleGlassTelemetry.VoiceCallsByStartingLanguage.Add(1,
+            new KeyValuePair<string, object?>("language", ActiveLanguage),
+            new KeyValuePair<string, object?>("reason", languageState.Reason));
         PurpleGlassTelemetry.ActiveVoiceSessions.Add(1,
             new KeyValuePair<string, object?>("provider", sessionIdentity.Provider),
             new KeyValuePair<string, object?>("direction", sessionIdentity.Direction));
@@ -105,6 +113,8 @@ public sealed class RealtimeVoiceSession(
         {
             ConversationStatusProjection conversation = await EnsureConversationAsync(sessionIdentity, sessionToken);
             conversationId = conversation.ConversationId;
+            languageState.Restore(conversation.Language, conversation.LanguageReason,
+                conversation.LanguageChangedAtUtc, conversation.LanguageChangeSequence);
             await PublishStateAsync(VoiceSessionState.Connecting, null, sessionToken);
             conversation = await PersistGreetingAsync(conversation, sessionToken);
 
@@ -143,7 +153,7 @@ public sealed class RealtimeVoiceSession(
             {
                 try
                 {
-                    await SpeakAsync(options.Conversation.Greeting, null, sessionToken);
+                    await SpeakAsync(Greeting, null, sessionToken);
                 }
                 catch (OperationCanceledException) when (!sessionToken.IsCancellationRequested)
                 {
@@ -223,7 +233,8 @@ public sealed class RealtimeVoiceSession(
         ConversationStatusProjection conversation = await conversations.CreateAsync(new CreateConversation(
             sessionIdentity.TenantId, sessionIdentity.LocationId, sessionIdentity.CallId,
             sessionIdentity.CorrelationId, options.Conversation.Version,
-            options.Conversation.Language, TraceId: Activity.Current?.TraceId.ToString()), cancellationToken);
+            ActiveLanguage, TraceId: Activity.Current?.TraceId.ToString(),
+            LanguageReason: languageState!.Reason), cancellationToken);
         if (conversation.State == "Created")
             conversation = await conversations.ActivateAsync(new ChangeConversationState(
                 sessionIdentity.TenantId, conversation.ConversationId, conversation.Version,
@@ -240,7 +251,7 @@ public sealed class RealtimeVoiceSession(
         Guid greetingId = DeterministicId(conversation.CallId, "voice:greeting");
         _ = await conversations.AddAssistantTurnAsync(new AddConversationTurn(
             identity!.TenantId, conversation.ConversationId, conversation.Version,
-            greetingId, options.Conversation.Greeting,
+            greetingId, Greeting,
             TraceId: Activity.Current?.TraceId.ToString()), cancellationToken);
         return await conversations.GetAsync(identity.TenantId, conversation.ConversationId, cancellationToken);
     }
@@ -442,7 +453,7 @@ public sealed class RealtimeVoiceSession(
         var timing = new TurnLatency(utterance.TurnId, endpointTimestamp);
         using Activity? turnActivity = PurpleGlassTelemetry.Calls.StartActivity("voice.turn", ActivityKind.Internal);
         turnActivity?.SetTag("voice.provider", sessionIdentity.Provider);
-        turnActivity?.SetTag("voice.language", options.Conversation.Language);
+        turnActivity?.SetTag("voice.language", ActiveLanguage);
         using CancellationTokenSource operation = BeginOperation(sessionToken);
         string result = "success";
         Guid? callerTurnId = null;
@@ -490,15 +501,35 @@ public sealed class RealtimeVoiceSession(
             operation.Token.ThrowIfCancellationRequested();
 
             conversation = await conversations.GetAsync(sessionIdentity.TenantId, conversation.ConversationId, sessionToken);
+            CallLanguageDecision languageDecision = languageState!.Evaluate(
+                recognizedText, recognition, timeProvider.GetUtcNow());
+            RecordLanguageDecision(languageDecision);
+            if (languageDecision.Accepted)
+            {
+                Guid changeId = DeterministicId(sessionIdentity.CallId,
+                    $"voice:language:{callerTurnId:N}:{languageDecision.Version}");
+                conversation = await conversations.ChangeLanguageAsync(new ChangeConversationLanguage(
+                    sessionIdentity.TenantId, conversation.ConversationId, conversation.Version,
+                    changeId, languageDecision.ActiveLanguageCode, languageDecision.Reason,
+                    languageDecision.Confidence, CausationId: utterance.TurnId,
+                    TraceId: Activity.Current?.TraceId.ToString()), sessionToken);
+                turnActivity?.SetTag("voice.language", ActiveLanguage);
+            }
             activeConversation = conversation;
             IReadOnlyList<LiveTranscriptTurn> transcript = await conversations.GetTranscriptAsync(
                 sessionIdentity.TenantId, conversation.ConversationId, sessionToken);
             await PublishStateAsync(VoiceSessionState.Thinking, null, operation.Token);
-            AiResponseResult response = await GenerateAsync(context, transcript, recognizedText, timing, operation.Token);
-            if (response.Failure is not null)
-                throw new VoicePipelineException(response.Failure.Code, response.Failure.SafeMessage);
-            string assistantText = VoiceResponsePolicy.Constrain(
-                response.AssistantText, options.Conversation.MaximumResponseCharacters);
+            string assistantText;
+            if (languageDecision.Unsupported)
+                assistantText = UnsupportedLanguageResponse;
+            else
+            {
+                AiResponseResult response = await GenerateAsync(context, transcript, recognizedText, timing, operation.Token);
+                if (response.Failure is not null)
+                    throw new VoicePipelineException(response.Failure.Code, response.Failure.SafeMessage);
+                assistantText = VoiceResponsePolicy.Constrain(
+                    response.AssistantText, options.Conversation.MaximumResponseCharacters);
+            }
             Guid assistantTurnId = DeterministicId(sessionIdentity.CallId, $"voice:assistant:{callerTurnId:N}");
             long assistantPersistStarted = timeProvider.GetTimestamp();
             RecordLatency(timing, "assistant_persistence_started", assistantPersistStarted, assistantPersistStarted,
@@ -544,12 +575,12 @@ public sealed class RealtimeVoiceSession(
             PurpleGlassTelemetry.VoiceTurns.Add(1,
                 new KeyValuePair<string, object?>("provider", sessionIdentity.Provider),
                 new KeyValuePair<string, object?>("result", SafeCode(result)),
-                new KeyValuePair<string, object?>("language", options.Conversation.Language));
+                new KeyValuePair<string, object?>("language", ActiveLanguage));
             PurpleGlassTelemetry.VoiceTurnDuration.Record(
                 timeProvider.GetElapsedTime(startedAt).TotalMilliseconds,
                 new KeyValuePair<string, object?>("provider", sessionIdentity.Provider),
                 new KeyValuePair<string, object?>("result", SafeCode(result)),
-                new KeyValuePair<string, object?>("language", options.Conversation.Language));
+                new KeyValuePair<string, object?>("language", ActiveLanguage));
             PurpleGlassTelemetry.VoiceTotalTurnLatency.Record(
                 timeProvider.GetElapsedTime(endpointTimestamp).TotalMilliseconds,
                 new KeyValuePair<string, object?>("provider", sessionIdentity.Provider),
@@ -571,7 +602,7 @@ public sealed class RealtimeVoiceSession(
         SpeechRecognitionResult result = await InvokeAsync(
             "recognize", options.RecognitionTimeout,
             token => speechRecognizer.RecognizeAsync(new SpeechRecognitionRequest(
-                context, options.Conversation.Language, new SimulatedUtteranceInput(string.Empty),
+                context, ActiveLanguage, new SimulatedUtteranceInput(string.Empty),
                 new SpeechAudioInput(utterance.Format, utterance.Audio,
                     $"{identity!.ProviderMediaStreamId}:{utterance.FirstSequence}:{utterance.LastSequence}")), token),
             value => value.Failure, cancellationToken);
@@ -605,7 +636,7 @@ public sealed class RealtimeVoiceSession(
             AiResponseResult result = await InvokeAsync(
                 "generate", options.LanguageModelTimeout,
                 token => languageModel.GenerateAsync(new AiResponseRequest(
-                    context, options.Conversation, DentalAgentBehavior.Build(options.Conversation),
+                    context, ActiveConfiguration, DentalAgentBehavior.Build(ActiveConfiguration),
                     history, callerText, [],
                     new SafetyEscalationPolicy(options.Conversation.SafetyPolicyVersion,
                         options.Conversation.EscalationKeywords, options.Conversation.UrgentKeywords)), token),
@@ -647,6 +678,7 @@ public sealed class RealtimeVoiceSession(
         long generation = 0;
         long responseStarted = 0;
         string diagnosticResponseId = Guid.NewGuid().ToString("N");
+        string synthesisLanguage = ActiveLanguage;
         if (existingOperation is null)
         {
             ownedOperation = BeginOperation(cancellationToken);
@@ -836,7 +868,7 @@ public sealed class RealtimeVoiceSession(
                 try
                 {
                     var request = new SpeechSynthesisRequest(
-                        RuntimeContext(Guid.NewGuid()), text, options.Conversation.Language,
+                        RuntimeContext(Guid.NewGuid()), text, synthesisLanguage,
                         new VoiceConfiguration(options.Conversation.VoiceId,
                             SpeakingRate: options.Conversation.SpeakingRate));
                     await foreach (SpeechSynthesisStreamUpdate update in speechSynthesizer
@@ -1116,7 +1148,7 @@ public sealed class RealtimeVoiceSession(
         PurpleGlassTelemetry.VoiceFailures.Add(1,
             new KeyValuePair<string, object?>("provider", identity!.Provider),
             new KeyValuePair<string, object?>("result", SafeCode(code)),
-            new KeyValuePair<string, object?>("language", options.Conversation.Language));
+            new KeyValuePair<string, object?>("language", ActiveLanguage));
         if (IsSynthesisFailure(code))
             PurpleGlassTelemetry.SpeechSynthesisFailures.Add(1);
         else if (code.StartsWith("speech_", StringComparison.Ordinal) || code.StartsWith("recognize_", StringComparison.Ordinal))
@@ -1129,6 +1161,63 @@ public sealed class RealtimeVoiceSession(
         code.StartsWith("synthesize_", StringComparison.Ordinal)
         || code.StartsWith("speech_synthesis_", StringComparison.Ordinal)
         || code.StartsWith("voice_", StringComparison.Ordinal);
+
+    private string ActiveLanguage => languageState?.ActiveLanguageCode
+        ?? SupportedCallLanguages.SystemFallbackCode;
+
+    private ConversationRuntimeConfiguration ActiveConfiguration => options.Conversation with
+    {
+        Language = ActiveLanguage,
+        Greeting = Greeting,
+    };
+
+    private string Greeting
+    {
+        get
+        {
+            if (SupportedCallLanguages.TryNormalize(options.Conversation.Language, out SupportedCallLanguage configured)
+                && configured.Code.Equals(ActiveLanguage, StringComparison.OrdinalIgnoreCase))
+                return options.Conversation.Greeting;
+            return SupportedCallLanguages.TryNormalize(ActiveLanguage, out SupportedCallLanguage active)
+                ? active.Greeting : SupportedCallLanguages.Fallback.Greeting;
+        }
+    }
+
+    private string FallbackResponse => ActiveLanguage.StartsWith("es", StringComparison.OrdinalIgnoreCase)
+        ? "Lo siento, tengo problemas para responder en este momento."
+        : "I'm sorry, I'm having trouble responding right now.";
+
+    private string UnsupportedLanguageResponse => ActiveLanguage.StartsWith("es", StringComparison.OrdinalIgnoreCase)
+        ? "Actualmente puedo continuar en inglés o español."
+        : "I can currently continue in English or Spanish.";
+
+    private void RecordLanguageDecision(CallLanguageDecision decision)
+    {
+        string confidenceBucket = decision.Confidence switch
+        {
+            >= 0.90m => "high",
+            >= 0.75m => "medium",
+            not null => "low",
+            _ => "not_provided",
+        };
+        if (decision.Accepted && decision.Reason == CallLanguageReasons.CallerExplicitRequest)
+            PurpleGlassTelemetry.VoiceExplicitLanguageSwitches.Add(1,
+                new KeyValuePair<string, object?>("language", decision.ActiveLanguageCode));
+        else if (decision.Accepted && decision.Reason == CallLanguageReasons.AutomaticDetection)
+            PurpleGlassTelemetry.VoiceAutomaticLanguageSwitches.Add(1,
+                new KeyValuePair<string, object?>("language", decision.ActiveLanguageCode));
+        else if (decision.Unsupported)
+            PurpleGlassTelemetry.VoiceUnsupportedLanguageRequests.Add(1,
+                new KeyValuePair<string, object?>("language", decision.ActiveLanguageCode));
+        else if (decision.Result is "low_confidence" or "mixed_language" or "cooldown" or "evidence_accumulating")
+            PurpleGlassTelemetry.VoiceLanguageSwitchesRejected.Add(1,
+                new KeyValuePair<string, object?>("result", decision.Result));
+
+        diagnostics.RecordLanguage(new VoiceLanguageDiagnostic(
+            identity!.CallId, identity.CorrelationId, languageState!.StartingLanguageCode,
+            decision.ActiveLanguageCode, decision.Reason, decision.Result, confidenceBucket,
+            decision.AlternateEvidenceCount, decision.Accepted, decision.Unsupported, decision.Version));
+    }
 
     private static void ValidateIdentity(VoiceSessionIdentity identity, IRealtimeAudioTransport transport)
     {

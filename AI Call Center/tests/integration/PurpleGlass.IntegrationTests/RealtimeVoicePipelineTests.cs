@@ -9,6 +9,7 @@ using PurpleGlass.Modules.CallManagement.Infrastructure;
 using PurpleGlass.Modules.Conversation.Application;
 using PurpleGlass.Modules.Conversation.Contracts;
 using PurpleGlass.Modules.Conversation.Infrastructure;
+using PurpleGlass.SharedKernel;
 
 namespace PurpleGlass.IntegrationTests;
 
@@ -77,6 +78,124 @@ public sealed class RealtimeVoicePipelineTests(DurablePathFixture fixture)
         Assert.True(await eventing.OutboxMessages.AnyAsync(message =>
             message.CorrelationId == harness.CorrelationId
             && message.MessageType == nameof(AIResponseGenerated)));
+        await AssertCompletedAndDisposedAsync(harness, "media_disconnected");
+    }
+
+    [Fact]
+    public async Task ExplicitLanguageRequestSwitchesGenerationAndSynthesisAndPersistsHistory()
+    {
+        await using SessionHarness harness = await CreateHarnessAsync();
+        Task run = harness.Start();
+        _ = await harness.States.WaitForAsync(change => change.State == VoiceSessionState.Listening);
+
+        await harness.Transport.QueueUtteranceAsync("Please speak Spanish.");
+        Task listening = harness.States.WaitForOccurrencesAsync(VoiceSessionState.Listening, 2);
+        Assert.True(ReferenceEquals(listening, await Task.WhenAny(listening, run)),
+            $"Session ended early: {string.Join(',', harness.Diagnostics.Exceptions.Select(item => $"{item.Stage}:{item.SafeCode}:{item.RootExceptionType}"))}");
+        await listening;
+        harness.Transport.CompleteInput();
+        await run.WaitAsync(TestTimeout);
+
+        Assert.Equal("es-US", Assert.Single(harness.LanguageModel.Requests).Configuration.Language);
+        Assert.Equal("es-US", harness.Synthesizer.Requests[1].Language);
+        ConversationDetails details = await ReadDetailsAsync(harness.TenantId, harness.CallId);
+        Assert.Equal("es-US", details.Language);
+        ConversationLanguageChangeProjection change = Assert.Single(details.LanguageChanges!);
+        Assert.Equal("en-US", change.PreviousLanguageCode);
+        Assert.Equal("es-US", change.LanguageCode);
+        Assert.Equal(CallLanguageReasons.CallerExplicitRequest, change.Reason);
+        await AssertCompletedAndDisposedAsync(harness, "media_disconnected");
+    }
+
+    [Fact]
+    public async Task RepeatedMeaningfulDetectedTurnsSwitchAutomaticallyWithoutFlapping()
+    {
+        var recognizer = new ControlledSpeechRecognizer(resultResponse: (request, _) =>
+        {
+            string text = Encoding.UTF8.GetString(request.AudioInput!.Audio.Span);
+            return new SpeechRecognitionResult(text, 0.96m, request.Language, null, null, true,
+                DetectedLanguages: ["es"], DetectionConfidence: 0.96m);
+        });
+        await using SessionHarness harness = await CreateHarnessAsync(recognizer: recognizer);
+        Task run = harness.Start();
+        _ = await harness.States.WaitForAsync(change => change.State == VoiceSessionState.Listening);
+
+        await harness.Transport.QueueUtteranceAsync("Necesito hacer una cita con el dentista mañana.");
+        await harness.Transport.QueueUtteranceAsync("También tengo dolor en una muela desde ayer.");
+        Task listening = harness.States.WaitForOccurrencesAsync(VoiceSessionState.Listening, 3);
+        Assert.True(ReferenceEquals(listening, await Task.WhenAny(listening, run)),
+            $"Session ended early: {string.Join(',', harness.Diagnostics.Exceptions.Select(item => $"{item.Stage}:{item.SafeCode}:{item.RootExceptionType}"))}");
+        await listening;
+        harness.Transport.CompleteInput();
+        await run.WaitAsync(TestTimeout);
+
+        Assert.Equal(["en-US", "es-US"],
+            harness.LanguageModel.Requests.Select(request => request.Configuration.Language).ToArray());
+        Assert.Equal(["en-US", "en-US", "es-US"],
+            harness.Synthesizer.Requests.Select(request => request.Language).ToArray());
+        ConversationDetails details = await ReadDetailsAsync(harness.TenantId, harness.CallId);
+        Assert.Equal("es-US", details.Language);
+        ConversationLanguageChangeProjection change = Assert.Single(details.LanguageChanges!);
+        Assert.Equal(CallLanguageReasons.AutomaticDetection, change.Reason);
+        Assert.Equal(0.96m, change.DetectionConfidence);
+        await AssertCompletedAndDisposedAsync(harness, "media_disconnected");
+    }
+
+    [Fact]
+    public async Task SpanishStartingLanguageControlsGreetingSttAgentAndTtsForCompleteSession()
+    {
+        await using SessionHarness harness = await CreateHarnessAsync(
+            startingLanguageCode: "es_pr", startingLanguageReason: CallLanguageReasons.LocationDefault);
+        Task run = harness.Start();
+        _ = await harness.States.WaitForAsync(change => change.State == VoiceSessionState.Listening);
+
+        Assert.Equal("es-PR", harness.Synthesizer.Requests[0].Language);
+        Assert.Equal(SupportedCallLanguages.Require("es-PR").Greeting, harness.Synthesizer.Requests[0].Text);
+        await harness.Transport.QueueUtteranceAsync("Necesito confirmar el horario de la oficina.");
+        _ = await harness.States.WaitForOccurrencesAsync(VoiceSessionState.Listening, 2);
+        harness.Transport.CompleteInput();
+        await run.WaitAsync(TestTimeout);
+
+        Assert.Equal("es-PR", Assert.Single(harness.Recognizer.Requests).Language);
+        AiResponseRequest generation = Assert.Single(harness.LanguageModel.Requests);
+        Assert.Equal("es-PR", generation.Configuration.Language);
+        Assert.Contains("Puerto Rico Spanish (es-PR)", generation.Behavior.Instructions, StringComparison.Ordinal);
+        Assert.Equal("es-PR", harness.Synthesizer.Requests[1].Language);
+        Assert.Equal(2, harness.Synthesizer.Requests.Count);
+        ConversationDetails details = await ReadDetailsAsync(harness.TenantId, harness.CallId);
+        Assert.Equal("es-PR", details.Language);
+        Assert.Empty(details.LanguageChanges!);
+        await AssertCompletedAndDisposedAsync(harness, "media_disconnected");
+    }
+
+    [Fact]
+    public async Task ExplicitSwitchDuringPlaybackClearsAndCancelsOldLanguageBeforeNewResponse()
+    {
+        var languageModel = new ControlledAiRuntime((_, invocation) =>
+            invocation == 1 ? "Old English response." : "Nueva respuesta en español.");
+        var synthesizer = new ControlledSpeechSynthesizer(blockOnInvocation: 2);
+        await using SessionHarness harness = await CreateHarnessAsync(
+            languageModel: languageModel, synthesizer: synthesizer);
+        Task run = harness.Start();
+        _ = await harness.States.WaitForAsync(change => change.State == VoiceSessionState.Listening);
+
+        await harness.Transport.QueueUtteranceAsync("Tell me about your office hours.");
+        await synthesizer.WaitForInvocationsAsync(2);
+        await harness.Transport.QueueUtteranceAsync("Speak Spanish.");
+        await synthesizer.WaitForInvocationsAsync(3);
+        _ = await harness.States.WaitForOccurrencesAsync(VoiceSessionState.Listening, 2);
+        harness.Transport.CompleteInput();
+        await run.WaitAsync(TestTimeout);
+
+        Assert.True(synthesizer.CancellationObserved);
+        Assert.Equal(1, harness.Transport.ClearPlaybackCount);
+        Assert.Equal("es-US", synthesizer.Requests[2].Language);
+        Assert.DoesNotContain("Old English response.", DecodeOutput(harness.Transport));
+        Assert.Contains("Nueva respuesta en español.", DecodeOutput(harness.Transport));
+        Assert.Contains(harness.Diagnostics.Languages,
+            diagnostic => diagnostic.SwitchAccepted
+                && diagnostic.ActiveLanguage == "es-US"
+                && diagnostic.Reason == CallLanguageReasons.CallerExplicitRequest);
         await AssertCompletedAndDisposedAsync(harness, "media_disconnected");
     }
 
@@ -713,7 +832,9 @@ public sealed class RealtimeVoicePipelineTests(DurablePathFixture fixture)
         ControlledSpeechRecognizer? recognizer = null,
         ControlledAiRuntime? languageModel = null,
         ControlledSpeechSynthesizer? synthesizer = null,
-        DbCommandInterceptor? commandInterceptor = null)
+        DbCommandInterceptor? commandInterceptor = null,
+        string startingLanguageCode = "en-US",
+        string startingLanguageReason = CallLanguageReasons.Fallback)
     {
         Guid tenantId = Guid.NewGuid();
         Guid locationId = Guid.NewGuid();
@@ -731,7 +852,9 @@ public sealed class RealtimeVoicePipelineTests(DurablePathFixture fixture)
                 "+15550001001",
                 "+15550001002",
                 correlationId,
-                Provider: "Fake"), default);
+                Provider: "Fake",
+                StartingLanguageCode: startingLanguageCode,
+                StartingLanguageReason: startingLanguageReason), default);
             VoiceCallContext call = await callService.ConnectVoiceMediaAsync("Fake", providerCallId, default);
             var conversationService = new ConversationService(conversations, callService, TimeProvider.System);
             var transport = new FakeRealtimeAudioTransport(providerCallId, $"FM-{Guid.NewGuid():N}");
@@ -758,7 +881,9 @@ public sealed class RealtimeVoicePipelineTests(DurablePathFixture fixture)
                 call.Provider,
                 call.ProviderCallId,
                 transport.ProviderMediaStreamId,
-                call.CorrelationId);
+                call.CorrelationId,
+                call.StartingLanguageCode,
+                call.StartingLanguageReason);
             return new SessionHarness(
                 calls,
                 conversations,
@@ -1111,6 +1236,8 @@ public sealed class RealtimeVoicePipelineTests(DurablePathFixture fixture)
             ExecuteAsync(service => service.AddCallerTurnAsync(command, cancellationToken));
         public Task<LiveTranscriptTurn> AddAssistantTurnAsync(AddConversationTurn command, CancellationToken cancellationToken) =>
             ExecuteAsync(service => service.AddAssistantTurnAsync(command, cancellationToken));
+        public Task<ConversationStatusProjection> ChangeLanguageAsync(ChangeConversationLanguage command, CancellationToken cancellationToken) =>
+            ExecuteAsync(service => service.ChangeLanguageAsync(command, cancellationToken));
         public Task<CompletedConversationSummary> CompleteAsync(CompleteConversation command, CancellationToken cancellationToken) =>
             ExecuteAsync(service => service.CompleteAsync(command, cancellationToken));
         public Task<ConversationStatusProjection> FailAsync(ChangeConversationState command, CancellationToken cancellationToken) =>
@@ -1135,17 +1262,37 @@ public sealed class RealtimeVoicePipelineTests(DurablePathFixture fixture)
     {
         private readonly object synchronization = new();
         private readonly List<VoiceLatencyDiagnostic> latencies = [];
+        private readonly List<VoiceSessionExceptionDiagnostic> exceptions = [];
+        private readonly List<VoiceLanguageDiagnostic> languages = [];
 
         public IReadOnlyList<VoiceLatencyDiagnostic> Latencies
         {
             get { lock (synchronization) return latencies.ToArray(); }
         }
 
-        public void RecordException(VoiceSessionExceptionDiagnostic diagnostic) { }
+        public IReadOnlyList<VoiceSessionExceptionDiagnostic> Exceptions
+        {
+            get { lock (synchronization) return exceptions.ToArray(); }
+        }
+
+        public IReadOnlyList<VoiceLanguageDiagnostic> Languages
+        {
+            get { lock (synchronization) return languages.ToArray(); }
+        }
+
+        public void RecordException(VoiceSessionExceptionDiagnostic diagnostic)
+        {
+            lock (synchronization) exceptions.Add(diagnostic);
+        }
 
         public void RecordLatency(VoiceLatencyDiagnostic diagnostic)
         {
             lock (synchronization) latencies.Add(diagnostic);
+        }
+
+        public void RecordLanguage(VoiceLanguageDiagnostic diagnostic)
+        {
+            lock (synchronization) languages.Add(diagnostic);
         }
     }
 
@@ -1156,19 +1303,22 @@ public sealed class RealtimeVoicePipelineTests(DurablePathFixture fixture)
         private readonly int? failureOnInvocation;
         private readonly RuntimeFailure failure;
         private readonly Func<SpeechRecognitionRequest, int, string>? response;
+        private readonly Func<SpeechRecognitionRequest, int, SpeechRecognitionResult>? resultResponse;
         private int cancellationObserved;
 
         public ControlledSpeechRecognizer(
             int? blockOnInvocation = null,
             int? failureOnInvocation = null,
             RuntimeFailure? failure = null,
-            Func<SpeechRecognitionRequest, int, string>? response = null)
+            Func<SpeechRecognitionRequest, int, string>? response = null,
+            Func<SpeechRecognitionRequest, int, SpeechRecognitionResult>? resultResponse = null)
         {
             this.blockOnInvocation = blockOnInvocation;
             this.failureOnInvocation = failureOnInvocation;
             this.failure = failure ?? new RuntimeFailure(
                 "speech_recognition_failed", "Speech recognition is unavailable.", false);
             this.response = response;
+            this.resultResponse = resultResponse;
         }
 
         public string AdapterKey => "controlled-speech";
@@ -1186,6 +1336,8 @@ public sealed class RealtimeVoicePipelineTests(DurablePathFixture fixture)
             if (failureOnInvocation == invocation)
                 return new SpeechRecognitionResult(
                     string.Empty, null, request.Language, null, null, false, failure);
+            if (resultResponse is not null)
+                return resultResponse(request, invocation);
             string text = response?.Invoke(request, invocation) ?? (request.AudioInput is { } input
                 ? Encoding.UTF8.GetString(input.Audio.Span)
                 : request.Input.Text);

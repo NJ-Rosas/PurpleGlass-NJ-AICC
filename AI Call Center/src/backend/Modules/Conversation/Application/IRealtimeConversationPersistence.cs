@@ -11,6 +11,8 @@ public interface IRealtimeConversationPersistence
     Task<IReadOnlyList<LiveTranscriptTurn>> GetTranscriptAsync(Guid tenantId, Guid conversationId, CancellationToken cancellationToken);
     Task<LiveTranscriptTurn> AddCallerTurnAsync(AddConversationTurn command, CancellationToken cancellationToken);
     Task<LiveTranscriptTurn> AddAssistantTurnAsync(AddConversationTurn command, CancellationToken cancellationToken);
+    Task<ConversationStatusProjection> ChangeLanguageAsync(ChangeConversationLanguage command, CancellationToken cancellationToken) =>
+        Task.FromException<ConversationStatusProjection>(new NotSupportedException("Language-change persistence is unavailable."));
     Task<CompletedConversationSummary> CompleteAsync(CompleteConversation command, CancellationToken cancellationToken);
     Task<ConversationStatusProjection> FailAsync(ChangeConversationState command, CancellationToken cancellationToken);
 }
@@ -33,6 +35,7 @@ public interface IVoiceSessionDiagnostics
     void RecordOutboundResponse(VoiceOutboundResponseDiagnostic diagnostic) { }
     void RecordPlaybackEvent(VoicePlaybackEventDiagnostic diagnostic) { }
     void RecordLatency(VoiceLatencyDiagnostic diagnostic) { }
+    void RecordLanguage(VoiceLanguageDiagnostic diagnostic) { }
 }
 
 public sealed record ConversationModelTurnDiagnostic(
@@ -119,6 +122,19 @@ public sealed record VoiceLatencyDiagnostic(
     double ElapsedFromEndpointMs,
     string Adapter,
     string Result);
+
+public sealed record VoiceLanguageDiagnostic(
+    Guid CallId,
+    Guid CorrelationId,
+    string StartingLanguage,
+    string ActiveLanguage,
+    string Reason,
+    string DetectionResult,
+    string ConfidenceBucket,
+    int AlternateEvidenceCount,
+    bool SwitchAccepted,
+    bool UnsupportedRequest,
+    long LanguageVersion);
 
 public sealed record VoiceSessionExceptionDiagnostic(
     Guid CallId,

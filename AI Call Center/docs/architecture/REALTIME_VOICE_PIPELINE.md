@@ -173,6 +173,30 @@ For each finalized caller utterance:
 
 Partial STT results and raw provider messages are not persisted. Only finalized Caller and Assistant text uses the existing Conversation transcript model.
 
+## Configurable and adaptive call language
+
+One bounded registry in SharedKernel is authoritative for language codes and capabilities. The initial entries are `en-US` (English), `es-US` (Spanish), and `es-PR` (Spanish for Puerto Rico); English is the system fallback. Each entry carries its normalized code, display name, STT recognition code, agent language name, one localized greeting, and fallback. API and persistence boundaries normalize known aliases but reject arbitrary language strings. Adding a future supported language extends the registry and provider compatibility rather than creating another conversation pipeline or database column.
+
+Starting language is resolved before greeting synthesis. A validated outbound per-call override wins; otherwise the active tenant/location's persisted default is used; missing or invalid legacy configuration falls back to `en-US`. Inbound calls always use the resolved location default. The call persists the resolved starting code and `call_override`, `location_default`, or `fallback` reason. The Conversation then persists starting language, current language, reason, change time, optional operational confidence, and a monotonic language-change sequence. A switch appends one deterministic, idempotent event row to the same tenant-scoped Conversation; it never resets transcript history or creates a new Conversation.
+
+The practical precedence is:
+
+1. a supported explicit caller request changes the current language immediately;
+2. a validated per-call override selects the startup language;
+3. repeated automatic evidence may change the current language later;
+4. the location default supplies startup when no override exists; and
+5. `en-US` is the system fallback.
+
+The startup override does not pin the call. Explicit intent such as “Speak Spanish” or “Háblame en inglés” resets automatic evidence and switches immediately. A repeated request for the already-active language is idempotent. A bounded unsupported request retains the current language and produces a polite current-language response that names English and Spanish. Language diagnostics record only normalized codes, bounded reason/result values, a confidence bucket, evidence count, accepted/rejected state, and version—never the caller's words.
+
+Automatic switching is deterministic application policy, not prompt behavior and not OpenAI adapter state. A caller must provide two consecutive alternate-language utterances that are at least four words and 16 characters. When confidence exists, it must be at least `0.75`. Empty detection, low confidence, multiple detected languages, short acknowledgements, and name/address context reset or reject evidence. Mixed English/Spanish (Spanglish) therefore remains in the current language unless later single-language turns satisfy the threshold; PurpleGlass does not produce word-by-word bilingual output. After any switch, two meaningful turns form a cooldown and automatic reversal requires three qualifying turns. An explicit request can always switch immediately.
+
+For OpenAI STT, `gpt-transcribe` completed-audio streaming returns the final transcript and detected language codes in the same `/v1/audio/transcriptions` request. The adapter omits a forced language hint on that path so detection remains possible, parses only the bounded final SSE event, and maps provider metadata to `SpeechRecognitionResult`. Configured older transcription models retain the existing one-request JSON path and active-language hint but may not expose detected-language metadata; in that case automatic switching waits while explicit switching continues to work. No second language-detection model call is made. Detection accuracy remains provider-dependent, especially for short or mixed-language speech.
+
+The active state is read for every stage: it selects the greeting, STT configuration, agent behavior/instructions, response configuration, fallback wording, and TTS language. A language request processed after barge-in uses the existing generation cancellation and `clear` boundary: old TTS, unsent media, pacing reserve, and stale marks are invalidated before the new-language response. The voice/model/transport implementation remains single-pipeline and provider-neutral; packetization, resampling, buffering, media readiness, marks, and playback thresholds do not vary by language.
+
+Administrative location-default changes use the existing tenant/location authorization, optimistic version, outbox, and audit transaction. Audit retains actor, tenant/location, time, and bounded old/new normalized codes. Call-level detections use bounded metrics and Conversation events rather than the administrative audit stream. Counters cover starting language, explicit/automatic switches, rejected evidence, and unsupported requests with registry-bounded labels only.
+
 ## Interruption and cancellation
 
 When new caller speech begins while the runtime is `Thinking` or `Speaking`, it invalidates the active response generation, cancels the linked LLM/TTS/send operation, invokes `IRealtimeAudioTransport.ClearPlaybackAsync`, publishes `Interrupted`, and continues detecting the new caller turn. The Twilio send and clear operations share a serialization gate: incomplete resampler state and unsent μ-law data are discarded before `clear`, pending marks are cleared, and no old-generation media or mark can be written afterward. A later response always creates independent synthesis, resampler, pacing, and mark state.

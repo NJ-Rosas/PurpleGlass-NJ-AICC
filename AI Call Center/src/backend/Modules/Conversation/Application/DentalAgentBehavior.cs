@@ -1,6 +1,7 @@
 using System.Collections.Frozen;
 using System.Globalization;
 using System.Text;
+using PurpleGlass.SharedKernel;
 
 namespace PurpleGlass.Modules.Conversation.Application;
 
@@ -53,8 +54,12 @@ public static class DentalAgentBehavior
 
         AppendTrustedFact(instructions, "office hours", configuration.OfficeHours);
         AppendTrustedFact(instructions, "office address or location", configuration.OfficeLocation);
+        string instructionLanguage = SupportedCallLanguages.TryNormalize(
+            configuration.Language, out SupportedCallLanguage language)
+            ? $"{language.AgentLanguageName} ({language.Code})"
+            : configuration.Language.Trim();
         instructions.Append(CultureInfo.InvariantCulture,
-            $"Continue in the configured call language {configuration.Language.Trim()} unless the caller clearly asks to change languages. ");
+            $"Respond only in the configured call language {instructionLanguage} unless the caller clearly asks to change languages. Do not provide a bilingual translation unless requested. ");
 
         instructions.Append(
             "Understand common dental-office requests, including new or existing appointments, rescheduling, cancellation, dental concerns, office information, insurance, billing, general questions, human assistance, and urgent concerns. " +

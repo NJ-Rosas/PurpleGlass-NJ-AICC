@@ -118,6 +118,8 @@ public sealed class CallManagementDbContext(DbContextOptions<CallManagementDbCon
         call.Property(entity => entity.ProviderParentCallId).HasMaxLength(200);
         call.Property(entity => entity.FromNumber).HasMaxLength(32).IsRequired();
         call.Property(entity => entity.ToNumber).HasMaxLength(32).IsRequired();
+        call.Property(entity => entity.StartingLanguageCode).HasMaxLength(35).HasDefaultValue("en-US").IsRequired();
+        call.Property(entity => entity.StartingLanguageReason).HasMaxLength(40).HasDefaultValue("fallback").IsRequired();
         call.Property(entity => entity.Outcome).HasMaxLength(100);
         call.Property(entity => entity.RecordingReference).HasMaxLength(500);
         call.Property(entity => entity.RecordingStorageProvider).HasMaxLength(100);

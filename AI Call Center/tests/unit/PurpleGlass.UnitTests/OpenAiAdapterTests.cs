@@ -225,6 +225,36 @@ public sealed class OpenAiAdapterTests
     }
 
     [Fact]
+    public async Task GptTranscribeMapsBoundedDetectedLanguageWithoutASecondRequest()
+    {
+        MultipartSnapshot multipart = default!;
+        var handler = new RecordingHttpMessageHandler(async (request, cancellationToken) =>
+        {
+            multipart = await SnapshotMultipartAsync(request, cancellationToken);
+            const string events = "data: {\"type\":\"transcript.text.delta\",\"delta\":\"Hola\"}\n\n"
+                + "data: {\"type\":\"transcript.text.done\",\"text\":\"Hola, necesito una cita dental.\",\"languages\":[{\"code\":\"es\"}]}\n\n";
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(events, Encoding.UTF8, "text/event-stream"),
+            };
+        });
+        using var httpClient = new HttpClient(handler);
+        var recognizer = new OpenAiSpeechRecognizer(httpClient,
+            SpeechOptions() with { TranscriptionModel = "gpt-transcribe" });
+
+        SpeechRecognitionResult result = await recognizer.RecognizeAsync(
+            RecognitionRequest([0x01, 0x02], "en-US"), default);
+
+        Assert.Null(result.Failure);
+        Assert.Equal("Hola, necesito una cita dental.", result.RecognizedText);
+        Assert.Equal(["es"], result.DetectedLanguageCodes);
+        Assert.Equal(1, handler.InvocationCount);
+        Assert.Equal("true", multipart.Fields["stream"]);
+        Assert.False(multipart.Fields.ContainsKey("language"));
+        Assert.False(multipart.Fields.ContainsKey("response_format"));
+    }
+
+    [Fact]
     public async Task RecognitionRejectsOversizedResponse()
     {
         const int maximumBytes = 1024;

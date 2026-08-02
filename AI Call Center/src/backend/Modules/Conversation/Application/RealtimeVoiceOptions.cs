@@ -6,6 +6,7 @@ public sealed record RealtimeVoiceOptions
 
     public bool Enabled { get; init; } = true;
     public required ConversationRuntimeConfiguration Conversation { get; init; }
+    public CallLanguagePolicyOptions LanguagePolicy { get; init; } = new();
     public TimeSpan RecognitionTimeout { get; init; } = TimeSpan.FromSeconds(15);
     public TimeSpan LanguageModelTimeout { get; init; } = TimeSpan.FromSeconds(15);
     public TimeSpan SynthesisTimeout { get; init; } = TimeSpan.FromSeconds(15);
@@ -26,7 +27,9 @@ public sealed record RealtimeVoiceOptions
     public RealtimeVoiceOptions Validate()
     {
         ArgumentNullException.ThrowIfNull(Conversation);
+        ArgumentNullException.ThrowIfNull(LanguagePolicy);
         Conversation.Validate();
+        LanguagePolicy.Validate();
         ValidateTimeout(RecognitionTimeout, nameof(RecognitionTimeout), TimeSpan.FromMinutes(2));
         ValidateTimeout(LanguageModelTimeout, nameof(LanguageModelTimeout), TimeSpan.FromMinutes(2));
         ValidateTimeout(SynthesisTimeout, nameof(SynthesisTimeout), TimeSpan.FromMinutes(2));

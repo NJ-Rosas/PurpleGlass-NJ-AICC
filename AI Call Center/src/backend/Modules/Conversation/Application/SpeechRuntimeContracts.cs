@@ -60,7 +60,12 @@ public sealed record SpeechRecognitionResult(
     DateTimeOffset? StartedAtUtc,
     DateTimeOffset? EndedAtUtc,
     bool IsFinal,
-    RuntimeFailure? Failure = null);
+    RuntimeFailure? Failure = null,
+    IReadOnlyList<string>? DetectedLanguages = null,
+    decimal? DetectionConfidence = null)
+{
+    public IReadOnlyList<string> DetectedLanguageCodes => DetectedLanguages ?? [];
+}
 
 public interface ISpeechRecognizer
 {

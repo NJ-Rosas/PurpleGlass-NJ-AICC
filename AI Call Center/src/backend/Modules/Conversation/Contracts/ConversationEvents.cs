@@ -40,4 +40,13 @@ public sealed record SummaryGenerated(
 
 public sealed record ConversationCompleted(Guid ConversationId, DateTimeOffset CompletedAtUtc);
 
+public sealed record ConversationLanguageChanged(
+    Guid ConversationId,
+    long Sequence,
+    string PreviousLanguageCode,
+    string LanguageCode,
+    string Reason,
+    decimal? DetectionConfidence,
+    DateTimeOffset ChangedAtUtc);
+
 public sealed record ConversationFailed(Guid ConversationId, DateTimeOffset FailedAtUtc);

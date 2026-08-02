@@ -12,11 +12,12 @@ import {
   useStartOutboundCallMutation,
   useHangupCallMutation,
   useUpdateLocationNameMutation,
+  useUpdateLocationDefaultCallLanguageMutation,
 } from '../services/prototypeApi'
 import { store } from '../app/store'
 import { reportOperationalFailure } from '../services/operationalDiagnostics'
 import { DeadLetterOperations } from './DeadLetterOperations'
-import { TelephonyControls } from './TelephonyControls'
+import { LocationLanguageControl, TelephonyControls } from './TelephonyControls'
 import {
   isTerminalCallState,
   parseVoiceStateEvent,
@@ -33,6 +34,8 @@ export function App() {
   const { data, isLoading, isError } = useGetTenantSummaryQuery(undefined, { skip: !session })
   const [updateName, updateState] = useUpdateLocationNameMutation()
   const [name, setName] = useState('')
+  const [defaultLanguage, setDefaultLanguage] = useState('')
+  const [updateDefaultLanguage, defaultLanguageState] = useUpdateLocationDefaultCallLanguageMutation()
   const [realtime, setRealtime] = useState<'connecting' | 'live' | 'offline'>('connecting')
   const { data: calls = [], isLoading: callsLoading, isError: callsError } = useGetCallsQuery(undefined, { skip: !session })
   const [selectedCallId, setSelectedCallId] = useState<string>()
@@ -47,7 +50,10 @@ export function App() {
   })
 
   useEffect(() => {
-    if (data) setName(data.locationDisplayName)
+    if (data) {
+      setName(data.locationDisplayName)
+      setDefaultLanguage(data.defaultCallLanguageCode)
+    }
   }, [data])
 
   useEffect(() => {
@@ -125,14 +131,23 @@ export function App() {
     }
   }
 
-  async function requestCall(destinationNumber: string) {
+  async function requestCall(destinationNumber: string, languageCode?: string) {
     if (!data) return
     try {
-      const call = await startCall({ locationId: data.locationId, destinationNumber, idempotencyKey: crypto.randomUUID() }).unwrap()
+      const call = await startCall({ locationId: data.locationId, destinationNumber, idempotencyKey: crypto.randomUUID(), languageCode }).unwrap()
       setSelectedCallId(call.callId)
       setView('calls')
     } catch {
       // RTK Query exposes the failure through startCallState for inline feedback.
+    }
+  }
+
+  async function saveDefaultLanguage() {
+    if (!data || !defaultLanguage) return
+    try {
+      await updateDefaultLanguage({ locationId: data.locationId, languageCode: defaultLanguage, expectedVersion: data.version }).unwrap()
+    } catch {
+      // RTK Query exposes the bounded validation/concurrency failure inline.
     }
   }
 
@@ -195,7 +210,9 @@ export function App() {
 
           <TelephonyControls status={telephonyStatus}
             canInitiate={session.permissions.includes('calls.outbound.initiate')}
-            loading={startCallState.isLoading} error={startCallState.isError} onStart={requestCall} />
+            loading={startCallState.isLoading} error={startCallState.isError}
+            supportedLanguages={data.supportedCallLanguages}
+            locationDefaultLanguageCode={data.defaultCallLanguageCode} onStart={requestCall} />
 
           </>}
 
@@ -260,6 +277,11 @@ export function App() {
               {updateState.isSuccess && <p className="success">Saved and queued for realtime delivery.</p>}
               {updateState.isError && <p className="error-text">The update conflicted or could not be saved. Refresh and try again.</p>}
             </form>
+            {session.permissions.includes('tenant.settings.manage') && <LocationLanguageControl
+              supportedLanguages={data.supportedCallLanguages} value={defaultLanguage}
+              currentValue={data.defaultCallLanguageCode} loading={defaultLanguageState.isLoading}
+              error={defaultLanguageState.isError} success={defaultLanguageState.isSuccess}
+              onChange={setDefaultLanguage} onSave={saveDefaultLanguage} />}
           </section>}
       </main>
     </div>

@@ -43,14 +43,21 @@ public sealed class OpenAiSpeechRecognizer : ISpeechRecognizer
         byte[] wave = CreateWave(request.AudioInput!);
         using var httpRequest = new HttpRequestMessage(HttpMethod.Post, options.TranscriptionsEndpoint);
         OpenAiSpeechHttp.AddAuthentication(httpRequest, options.ApiKey);
-        httpRequest.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
         var form = new MultipartFormDataContent();
         var audioContent = new ByteArrayContent(wave);
         audioContent.Headers.ContentType = new MediaTypeHeaderValue("audio/wav");
         form.Add(audioContent, "file", "utterance.wav");
         form.Add(new StringContent(options.TranscriptionModel, Encoding.UTF8), "model");
-        form.Add(new StringContent(language, Encoding.UTF8), "language");
-        form.Add(new StringContent("json", Encoding.UTF8), "response_format");
+        bool detectedLanguageStream = options.TranscriptionModel.Equals("gpt-transcribe", StringComparison.OrdinalIgnoreCase);
+        httpRequest.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue(
+            detectedLanguageStream ? "text/event-stream" : "application/json"));
+        if (detectedLanguageStream)
+            form.Add(new StringContent("true", Encoding.UTF8), "stream");
+        else
+        {
+            form.Add(new StringContent(language, Encoding.UTF8), "language");
+            form.Add(new StringContent("json", Encoding.UTF8), "response_format");
+        }
         httpRequest.Content = form;
 
         try
@@ -65,19 +72,9 @@ public sealed class OpenAiSpeechRecognizer : ISpeechRecognizer
                     OpenAiSpeechHttp.MapRecognitionFailure(response.StatusCode));
             }
 
-            byte[] responseBody = await OpenAiSpeechHttp.ReadBoundedAsync(
-                response.Content,
-                options.MaximumTranscriptionResponseBytes,
-                cancellationToken);
-            using JsonDocument document = JsonDocument.Parse(responseBody);
-            if (!document.RootElement.TryGetProperty("text", out JsonElement textElement)
-                || textElement.ValueKind != JsonValueKind.String)
-            {
-                return Failure(request.Language, startedAtUtc,
-                    new RuntimeFailure("speech_recognition_response_invalid", "Speech recognition returned an invalid response.", false));
-            }
-
-            string text = (textElement.GetString() ?? string.Empty).Trim();
+            (string text, IReadOnlyList<string> detectedLanguages) = detectedLanguageStream
+                ? await ReadDetectedLanguageStreamAsync(response.Content, cancellationToken)
+                : await ReadJsonAsync(response.Content, cancellationToken);
             if (text.Length == 0 || text.Length > options.MaximumTranscriptCharacters)
             {
                 return Failure(request.Language, startedAtUtc,
@@ -90,7 +87,8 @@ public sealed class OpenAiSpeechRecognizer : ISpeechRecognizer
                 request.Language,
                 startedAtUtc,
                 DateTimeOffset.UtcNow,
-                true);
+                true,
+                DetectedLanguages: detectedLanguages);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -122,6 +120,71 @@ public sealed class OpenAiSpeechRecognizer : ISpeechRecognizer
                 new RuntimeFailure("speech_recognition_response_too_large", "Speech recognition exceeded the safe response size.", false));
         }
     }
+
+    private async Task<(string Text, IReadOnlyList<string> Languages)> ReadJsonAsync(
+        HttpContent content, CancellationToken cancellationToken)
+    {
+        byte[] responseBody = await OpenAiSpeechHttp.ReadBoundedAsync(
+            content, options.MaximumTranscriptionResponseBytes, cancellationToken);
+        using JsonDocument document = JsonDocument.Parse(responseBody);
+        if (!document.RootElement.TryGetProperty("text", out JsonElement textElement)
+            || textElement.ValueKind != JsonValueKind.String)
+            throw new JsonException("Transcription text was missing.");
+        return ((textElement.GetString() ?? string.Empty).Trim(), ReadLanguages(document.RootElement));
+    }
+
+    private async Task<(string Text, IReadOnlyList<string> Languages)> ReadDetectedLanguageStreamAsync(
+        HttpContent content, CancellationToken cancellationToken)
+    {
+        await using Stream stream = await content.ReadAsStreamAsync(cancellationToken);
+        using var reader = new StreamReader(stream, Encoding.UTF8, false, 4096, leaveOpen: false);
+        int consumedBytes = 0;
+        string? finalText = null;
+        IReadOnlyList<string> languages = [];
+        while (await reader.ReadLineAsync(cancellationToken) is { } line)
+        {
+            consumedBytes = checked(consumedBytes + Encoding.UTF8.GetByteCount(line) + 1);
+            if (consumedBytes > options.MaximumTranscriptionResponseBytes)
+                throw new OpenAiSpeechResponseTooLargeException();
+            if (!line.StartsWith("data:", StringComparison.OrdinalIgnoreCase)) continue;
+            string json = line[5..].Trim();
+            if (json.Length == 0 || json == "[DONE]") continue;
+            using JsonDocument document = JsonDocument.Parse(json);
+            JsonElement root = document.RootElement;
+            if (!root.TryGetProperty("type", out JsonElement type)
+                || !string.Equals(type.GetString(), "transcript.text.done", StringComparison.Ordinal)) continue;
+            if (root.TryGetProperty("text", out JsonElement text) && text.ValueKind == JsonValueKind.String)
+                finalText = text.GetString();
+            languages = ReadLanguages(root);
+        }
+        if (string.IsNullOrWhiteSpace(finalText)) throw new JsonException("Final transcription event was missing.");
+        return (finalText.Trim(), languages);
+    }
+
+    private static List<string> ReadLanguages(JsonElement root)
+    {
+        var languages = new List<string>(2);
+        if (root.TryGetProperty("languages", out JsonElement array) && array.ValueKind == JsonValueKind.Array)
+        {
+            foreach (JsonElement item in array.EnumerateArray())
+            {
+                string? code = item.ValueKind == JsonValueKind.String
+                    ? item.GetString()
+                    : item.ValueKind == JsonValueKind.Object && item.TryGetProperty("code", out JsonElement codeElement)
+                        ? codeElement.GetString() : null;
+                if (IsBoundedLanguageCode(code) && !languages.Contains(code!, StringComparer.OrdinalIgnoreCase))
+                    languages.Add(code!.ToLowerInvariant());
+            }
+        }
+        else if (root.TryGetProperty("language", out JsonElement language) && language.ValueKind == JsonValueKind.String
+            && IsBoundedLanguageCode(language.GetString()))
+            languages.Add(language.GetString()!.ToLowerInvariant());
+        return languages;
+    }
+
+    private static bool IsBoundedLanguageCode(string? value) =>
+        !string.IsNullOrWhiteSpace(value) && value.Length <= 35
+        && value.All(character => char.IsLetter(character) || character is '-' or '_');
 
     private RuntimeFailure? ValidateAudio(SpeechAudioInput? input)
     {
