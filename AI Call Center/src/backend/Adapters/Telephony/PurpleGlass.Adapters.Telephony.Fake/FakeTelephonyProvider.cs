@@ -6,14 +6,17 @@ namespace PurpleGlass.Adapters.Telephony.Fake;
 public sealed class FakeTelephonyProvider : ITelephonyProvider, ITelephonyWebhookVerifier
 {
     private readonly ConcurrentDictionary<Guid, string> calls = new();
+    private readonly ConcurrentDictionary<Guid, OutboundCallTransport> requests = new();
     public string Name => "Fake";
     public string Provider => Name;
     public TelephonyProviderStatus Status => new(true, true, "configured");
     public string? NextFailureCode { get; set; }
     public IReadOnlyDictionary<Guid, string> Calls => calls;
+    public IReadOnlyDictionary<Guid, OutboundCallTransport> Requests => requests;
 
     public Task<OutboundCallResult> StartOutboundCallAsync(OutboundCallTransport request, CancellationToken cancellationToken)
     {
+        requests.TryAdd(request.OperationId, request);
         if (NextFailureCode is { } failure)
         {
             NextFailureCode = null;

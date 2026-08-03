@@ -10,7 +10,8 @@ public sealed class CallManagementService(
     ICallStore store,
     TimeProvider timeProvider,
     ITelephonyStore? telephonyStore = null,
-    ILocationCallLanguageResolver? locationLanguageResolver = null) : ICallEligibilityQuery
+    ILocationCallLanguageResolver? locationLanguageResolver = null,
+    ICallCreationDiagnostics? callCreationDiagnostics = null) : ICallEligibilityQuery
 {
     private ITelephonyStore Telephony => telephonyStore ?? store as ITelephonyStore
         ?? throw new CallApplicationException("telephony_store_unavailable", "Telephony persistence is not available.");
@@ -62,14 +63,19 @@ public sealed class CallManagementService(
 
     public async Task<CallSummary> RequestTransportOutboundAsync(RequestTransportOutboundCall command, CancellationToken cancellationToken)
     {
+        callCreationDiagnostics?.SetContext(command.TenantId, command.LocationId);
         string destination = PhoneNumber.Normalize(command.DestinationNumber);
+        callCreationDiagnostics?.Mark("request_validated");
         (string startingLanguage, string languageReason) = await ResolveStartingLanguageAsync(
             command.TenantId, command.LocationId, command.LanguageCode, cancellationToken);
+        callCreationDiagnostics?.Mark("language_resolved");
         CallSession? existing = await store.GetByOutboundKeyAsync(command.TenantId, command.IdempotencyKey, cancellationToken);
+        callCreationDiagnostics?.Mark("idempotency_checked", existing?.Id.Value);
         if (existing is not null)
         {
             if (existing.ToNumber != destination || existing.StartingLanguageCode != startingLanguage)
                 throw CallApplicationException.IdempotencyConflict();
+            callCreationDiagnostics?.Mark("idempotent_response", existing.Id.Value);
             return Map(existing);
         }
 
@@ -80,12 +86,18 @@ public sealed class CallManagementService(
             CallSessionId.New(), new TenantId(command.TenantId), new LocationId(command.LocationId),
             null, source.NormalizedNumber, destination, command.CorrelationId, now, source.Provider,
             startingLanguage, languageReason);
+        callCreationDiagnostics?.Mark("call_aggregate_created", call.Id.Value);
         store.Add(call);
         store.AddOutboundRequest(command.TenantId, RequireKey(command.IdempotencyKey), call.Id.Value, now);
         Telephony.Add(new TelephonyOperation(Guid.NewGuid(), call.TenantId, call.LocationId, call.Id,
             TelephonyOperationType.StartOutbound, now));
+        callCreationDiagnostics?.Mark("dispatch_created", call.Id.Value);
         AddEvent(call, new OutboundCallRequested(call.Id.Value, now), nameof(OutboundCallRequested), now, command.CausationId, command.TraceId);
+        callCreationDiagnostics?.Mark("outbox_created", call.Id.Value);
+        callCreationDiagnostics?.Mark("persistence_started", call.Id.Value);
         await SaveAsync(cancellationToken);
+        callCreationDiagnostics?.Mark("persistence_completed", call.Id.Value);
+        callCreationDiagnostics?.MarkPersistenceCompleted(call.Id.Value);
         return Map(call);
     }
 
@@ -245,7 +257,9 @@ public sealed class CallManagementService(
         await SaveAsync(cancellationToken);
         return new TelephonyDispatch(operation.Id, operation.Type.ToString(), operation.TenantId.Value,
             operation.LocationId.Value, operation.CallId.Value, call.Provider, call.ProviderCallId,
-            call.FromNumber, call.ToNumber, operation.CreatedAtUtc);
+            call.FromNumber, call.ToNumber, operation.CreatedAtUtc,
+            StartingLanguageCode: call.StartingLanguageCode,
+            StartingLanguageReason: call.StartingLanguageReason);
     }
 
     public async Task CompleteTelephonyDispatchAsync(Guid operationId, string? providerCallId, string? safeErrorCode, CancellationToken cancellationToken)
@@ -441,8 +455,10 @@ public sealed class CallManagementService(
         {
             if (!SupportedCallLanguages.TryNormalize(overrideCode, out SupportedCallLanguage language))
                 throw new CallApplicationException("unsupported_call_language", "The requested call language is not supported.");
+            callCreationDiagnostics?.Mark("language_validated");
             return (language.Code, "call_override");
         }
+        callCreationDiagnostics?.Mark("language_validated");
         string? configured = locationLanguageResolver is null
             ? null
             : await locationLanguageResolver.ResolveDefaultLanguageAsync(tenantId, locationId, cancellationToken);

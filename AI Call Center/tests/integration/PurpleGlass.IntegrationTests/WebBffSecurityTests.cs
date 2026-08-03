@@ -214,13 +214,7 @@ public sealed class WebBffSecurityTests : IClassFixture<SecurityWebApplicationFa
     [Fact]
     public async Task AdministratorOutboundRequestUsesCsrfScopeAuditAndDurableIntent()
     {
-        using (IServiceScope scope = factory.Services.CreateScope())
-        {
-            CallManagementService calls = scope.ServiceProvider.GetRequiredService<CallManagementService>();
-            _ = await calls.ConfigureTelephonyNumberAsync(new ConfigureTelephonyNumber(
-                DevelopmentIdentityDirectory.TenantId, DevelopmentIdentityDirectory.LocationId,
-                "None", "+17875551300", null, false, true, true), default);
-        }
+        await ConfigureSyntheticNumberAsync();
         using HttpClient client = factory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true });
         await LoginAsync(client, "administrator");
         string csrf = await GetCsrfAsync(client);
@@ -291,12 +285,9 @@ public sealed class WebBffSecurityTests : IClassFixture<SecurityWebApplicationFa
     public async Task AdministratorCanNormalizeAndAuditLocationDefaultCallLanguage()
     {
         long expectedVersion;
+        await ConfigureSyntheticNumberAsync();
         using (IServiceScope scope = factory.Services.CreateScope())
         {
-            CallManagementService calls = scope.ServiceProvider.GetRequiredService<CallManagementService>();
-            _ = await calls.ConfigureTelephonyNumberAsync(new ConfigureTelephonyNumber(
-                DevelopmentIdentityDirectory.TenantId, DevelopmentIdentityDirectory.LocationId,
-                "None", "+17875551300", null, false, true, true), default);
             TenancyDbContext tenancy = scope.ServiceProvider.GetRequiredService<TenancyDbContext>();
             expectedVersion = await tenancy.Locations
                 .Where(location => location.Id == new PurpleGlass.Modules.Tenancy.Domain.LocationId(
@@ -450,6 +441,27 @@ public sealed class WebBffSecurityTests : IClassFixture<SecurityWebApplicationFa
         using HttpClient client = factory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true });
         await LoginAsync(client, "administrator");
         Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync($"/bff/v1/operations/dead-letters/{message.Id:D}")).StatusCode);
+    }
+
+    private async Task ConfigureSyntheticNumberAsync()
+    {
+        using IServiceScope scope = factory.Services.CreateScope();
+        CallManagementService calls = scope.ServiceProvider.GetRequiredService<CallManagementService>();
+        IReadOnlyList<PurpleGlass.Modules.CallManagement.Contracts.TelephonyNumberSummary> configured =
+            await calls.GetTelephonyNumbersAsync(DevelopmentIdentityDirectory.TenantId, default);
+        foreach (PurpleGlass.Modules.CallManagement.Contracts.TelephonyNumberSummary existing in configured.Where(
+                     number => number.LocationId == DevelopmentIdentityDirectory.LocationId
+                         && number.Active
+                         && (!string.Equals(number.Provider, "None", StringComparison.Ordinal)
+                             || !string.Equals(number.Number, "+17875551300", StringComparison.Ordinal))))
+        {
+            _ = await calls.ConfigureTelephonyNumberAsync(new ConfigureTelephonyNumber(
+                existing.TenantId, existing.LocationId, existing.Provider, existing.Number,
+                null, existing.InboundEnabled, existing.OutboundEnabled, false), default);
+        }
+        _ = await calls.ConfigureTelephonyNumberAsync(new ConfigureTelephonyNumber(
+            DevelopmentIdentityDirectory.TenantId, DevelopmentIdentityDirectory.LocationId,
+            "None", "+17875551300", null, false, true, true), default);
     }
 
     private async Task<OutboxMessage> SeedDeadLetterAsync(Guid tenantId, Guid locationId)

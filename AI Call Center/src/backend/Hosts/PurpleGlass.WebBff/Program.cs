@@ -148,6 +148,9 @@ builder.Services.AddTenancyInfrastructure(connectionString);
 builder.Services.AddScoped<SecurityAuditService>();
 builder.Services.AddScoped<TenancyService>();
 builder.Services.AddSingleton<ILocationCallLanguageResolver, ScopedLocationCallLanguageResolver>();
+builder.Services.AddScoped<CallCreationDiagnosticState>();
+builder.Services.AddScoped<ICallCreationDiagnostics>(provider =>
+    provider.GetRequiredService<CallCreationDiagnosticState>());
 builder.Services.AddCallManagementInfrastructure(connectionString);
 builder.Services.AddConversationInfrastructure(connectionString);
 builder.Services.AddEventingInfrastructure(connectionString);
@@ -449,9 +452,11 @@ protectedBff.MapGet("/calls", async (TrustedRequestContextAccessor accessor, Cal
 protectedBff.MapPost("/calls/outbound", async (OutboundTransportRequest request, HttpContext httpContext,
     IAntiforgery antiforgery, TrustedRequestContextAccessor accessor, CallManagementService calls,
     SecurityAuditService audit, ITelephonyProvider provider, RealtimeVoiceRuntimeStatus voiceRuntime,
-    WorkerRuntimeGateway workerRuntime,
+    WorkerRuntimeGateway workerRuntime, CallCreationDiagnosticState diagnostics,
+    ILogger<CallCreationDiagnosticState> diagnosticLogger,
     CancellationToken cancellationToken) =>
 {
+    diagnostics.Mark("request_accepted");
     await antiforgery.ValidateRequestAsync(httpContext);
     if (provider.Status.Enabled
         && provider.Name.Equals("Twilio", StringComparison.OrdinalIgnoreCase)
@@ -459,14 +464,28 @@ protectedBff.MapPost("/calls/outbound", async (OutboundTransportRequest request,
         throw new CallApplicationException("telephony_runtime_unavailable",
             "The telephony realtime voice runtime is unavailable.");
     RequestContext context = accessor.Current;
+    diagnostics.SetContext(context.TenantId, request.LocationId);
     if (context.AuthorizedLocationIds?.Contains(request.LocationId) != true)
         throw new SecurityBoundaryException("location_access_denied");
+    diagnostics.Mark("authorization_passed");
     await workerRuntime.EnsureReadyAsync(cancellationToken);
+    diagnostics.Mark("worker_ready");
     CallSummary call = await calls.RequestTransportOutboundAsync(new RequestTransportOutboundCall(
         context.TenantId, request.LocationId, request.IdempotencyKey,
         request.DestinationNumber, context.CorrelationId, LanguageCode: request.LanguageCode), cancellationToken);
     await audit.WriteAsync(context.TenantId, request.LocationId, context.ActorId, "OutboundCallRequested",
         "CallSession", call.CallId.ToString("D"), "Allowed", "telephony_transport", context.CorrelationId, cancellationToken);
+    diagnostics.Mark("response_returned", call.CallId);
+    string traceId = Activity.Current?.TraceId.ToString() ?? httpContext.TraceIdentifier;
+    if (diagnosticLogger.IsEnabled(LogLevel.Information))
+    {
+        CallCreationLog.Completed(diagnosticLogger,
+            traceId, context.CorrelationId, "outbound_call_create",
+            httpContext.Request.Method, context.Role,
+            diagnostics.TenantId, diagnostics.LocationId, diagnostics.CallId, diagnostics.Stage,
+            diagnostics.TransactionBegan, diagnostics.CallPersisted, diagnostics.OutboxPersisted,
+            diagnostics.DispatchPersisted, diagnostics.ProviderDispatchOccurred);
+    }
     return Results.Accepted($"/bff/v1/calls/{call.CallId:D}", call);
 }).RequireAuthorization(SecurityPolicies.InitiateOutbound).RequireRateLimiting("security");
 protectedBff.MapPost("/calls/{callId:guid}/hangup", async (Guid callId, HttpContext httpContext,
@@ -731,7 +750,9 @@ namespace PurpleGlass.WebBff
         public static partial void DevelopmentAuthenticationUsed(ILogger logger);
     }
 
-    public sealed class SecurityExceptionHandler(IProblemDetailsService problemDetailsService) : IExceptionHandler
+    public sealed class SecurityExceptionHandler(
+        IProblemDetailsService problemDetailsService,
+        ILogger<SecurityExceptionHandler> logger) : IExceptionHandler
     {
         public async ValueTask<bool> TryHandleAsync(HttpContext httpContext, Exception exception, CancellationToken cancellationToken)
         {
@@ -744,6 +765,7 @@ namespace PurpleGlass.WebBff
                     _ => (403, "Access denied", securityException.Code)
                 },
                 AntiforgeryValidationException => (400, "CSRF validation failed", "csrf_validation_failed"),
+                BadHttpRequestException or JsonException => (400, "Invalid request", "invalid_request"),
                 TenancyResourceNotFoundException => (404, "Resource not found", "resource_not_found"),
                 TenancyConcurrencyException => (409, "Resource changed", "concurrency_conflict"),
                 TenancyValidationException validation => (400, "Location setting is invalid", validation.Code),
@@ -757,6 +779,38 @@ namespace PurpleGlass.WebBff
                 ArgumentException => (400, "Invalid request", "invalid_request"),
                 _ => (500, "An unexpected error occurred", "unexpected_error")
             };
+            CallCreationDiagnosticState diagnostics =
+                httpContext.RequestServices.GetRequiredService<CallCreationDiagnosticState>();
+            Guid correlationId = Guid.Empty;
+            string role = httpContext.User.Identity?.IsAuthenticated == true ? "authenticated" : "anonymous";
+            try
+            {
+                RequestContext request = httpContext.RequestServices
+                    .GetRequiredService<TrustedRequestContextAccessor>().Current;
+                correlationId = request.CorrelationId;
+                role = request.Role;
+                diagnostics.SetContext(request.TenantId, diagnostics.LocationId ?? request.LocationId);
+            }
+            catch (SecurityBoundaryException) { }
+            string traceId = Activity.Current?.TraceId.ToString() ?? httpContext.TraceIdentifier;
+            bool outboundCallCreation = httpContext.Request.Path.StartsWithSegments("/bff/v1/calls/outbound");
+            string route = outboundCallCreation ? "outbound_call_create" : "bff_request";
+            if (status >= 500)
+            {
+                CallCreationLog.Failed(logger, traceId, correlationId, route,
+                    httpContext.Request.Method, role, diagnostics.TenantId, diagnostics.LocationId,
+                    diagnostics.CallId, code, diagnostics.Stage, diagnostics.TransactionBegan,
+                    diagnostics.CallPersisted, diagnostics.OutboxPersisted, diagnostics.DispatchPersisted,
+                    diagnostics.ProviderDispatchOccurred, exception.GetType().Name);
+            }
+            else if (outboundCallCreation)
+            {
+                CallCreationLog.Rejected(logger, traceId, correlationId, route,
+                    httpContext.Request.Method, role, diagnostics.TenantId, diagnostics.LocationId,
+                    diagnostics.CallId, code, diagnostics.Stage, diagnostics.TransactionBegan,
+                    diagnostics.CallPersisted, diagnostics.OutboxPersisted, diagnostics.DispatchPersisted,
+                    diagnostics.ProviderDispatchOccurred, exception.GetType().Name);
+            }
             if (code == "csrf_validation_failed") PurpleGlassTelemetry.SecurityCsrfFailure.Add(1);
             else if (status == 401) PurpleGlassTelemetry.SecurityAuthFailure.Add(1);
             else if (status == 403) PurpleGlassTelemetry.SecurityAuthorizationDenied.Add(1);

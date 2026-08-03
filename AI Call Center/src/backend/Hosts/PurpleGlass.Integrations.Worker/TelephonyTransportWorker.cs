@@ -87,7 +87,9 @@ public sealed partial class TelephonyDispatchProcessor(
             var request = new OutboundCallTransport(
                 dispatch.OperationId, dispatch.CallId, dispatch.FromNumber, dispatch.ToNumber,
                 new Uri(publicBaseUrl, $"/telephony/twilio/answer?operationId={dispatch.OperationId:D}"),
-                new Uri(publicBaseUrl, $"/telephony/twilio/status?operationId={dispatch.OperationId:D}"));
+                new Uri(publicBaseUrl, $"/telephony/twilio/status?operationId={dispatch.OperationId:D}"),
+                StartingLanguageCode: dispatch.StartingLanguageCode,
+                StartingLanguageReason: dispatch.StartingLanguageReason);
             OutboundCallResult result = await provider.StartOutboundCallAsync(request, cancellationToken);
             providerCallId = result.ProviderCallId;
             error = result.SafeErrorCode;

@@ -49,6 +49,18 @@ Consumers assume duplicates, stale messages, out-of-order delivery, timeouts, an
 
 Critical relationship: Call Management owns call state; Conversation owns conversational reasoning state. Neither should silently update the other's tables.
 
+## Outbound call-creation boundary
+
+1. The BFF binds a typed request containing one scalar destination and an optional supported starting-language code.
+2. Authentication, fresh CSRF validation, permission, tenant, and location scope are enforced before durable work.
+3. The worker readiness gate must succeed before Call Management creates an outbound intent.
+4. Call Management normalizes the destination, resolves override → location default → fallback language precedence, and checks the idempotency receipt.
+5. A new `CallSession`, one `TelephonyOperation`, one idempotency receipt, and the initial outbox event commit atomically. The starting language and bounded source are aggregate state before insertion.
+6. An equivalent retry returns the existing call; incompatible destination or language semantics return the bounded idempotency conflict and create nothing else.
+7. The integrations worker claims the durable operation after commit, rehydrates the call's normalized starting-language code/source, and carries both through the backward-compatible provider-neutral request before invoking only the configured adapter. Starting-language state remains authoritative on the call and is later resolved with the same call for realtime media.
+
+Malformed JSON is an API-boundary rejection, not a call-creation attempt. It returns `invalid_request` and cannot reach worker readiness, language resolution, persistence, outbox creation, or a provider. Request-scoped stage diagnostics identify the last bounded stage and commit booleans without logging bodies, phone numbers, idempotency keys, credentials, arbitrary exception messages, or patient/conversation content.
+
 ## Appointment and Open Dental flow
 
 ### Read/display

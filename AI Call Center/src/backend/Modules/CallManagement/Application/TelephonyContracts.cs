@@ -22,7 +22,9 @@ public sealed record OutboundCallTransport(
     string FromNumber,
     string DestinationNumber,
     Uri AnswerUrl,
-    Uri StatusCallbackUrl);
+    Uri StatusCallbackUrl,
+    string StartingLanguageCode = "en-US",
+    string StartingLanguageReason = "fallback");
 
 public sealed record OutboundCallResult(bool Succeeded, string? ProviderCallId, string? SafeErrorCode)
 {
@@ -56,6 +58,13 @@ public interface ILocationCallLanguageResolver
     Task<string?> ResolveDefaultLanguageAsync(Guid tenantId, Guid locationId, CancellationToken cancellationToken);
 }
 
+public interface ICallCreationDiagnostics
+{
+    void SetContext(Guid tenantId, Guid locationId);
+    void Mark(string stage, Guid? callId = null);
+    void MarkPersistenceCompleted(Guid callId);
+}
+
 public sealed record TelephonyDispatch(
     Guid OperationId,
     string OperationType,
@@ -66,4 +75,6 @@ public sealed record TelephonyDispatch(
     string? ProviderCallId,
     string FromNumber,
     string ToNumber,
-    DateTimeOffset CreatedAtUtc);
+    DateTimeOffset CreatedAtUtc,
+    string StartingLanguageCode = "en-US",
+    string StartingLanguageReason = "fallback");

@@ -32,6 +32,7 @@ public class DurablePathFixture : IAsyncLifetime
         await calls.Database.MigrateAsync();
         await using ConversationDbContext conversations = CreateConversations();
         await conversations.Database.MigrateAsync();
+        await PrototypeSeed.ApplyAsync(tenancy, CancellationToken.None);
     }
 
     public async Task DisposeAsync()
