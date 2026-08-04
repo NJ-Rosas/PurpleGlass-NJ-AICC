@@ -520,6 +520,7 @@ public sealed class RealtimeVoiceSession(
             operation.Token.ThrowIfCancellationRequested();
 
             conversation = await conversations.GetAsync(sessionIdentity.TenantId, conversation.ConversationId, sessionToken);
+            string priorLanguage = ActiveLanguage;
             CallLanguageDecision languageDecision = languageState!.Evaluate(
                 recognizedText, recognition, timeProvider.GetUtcNow());
             RecordLanguageDecision(languageDecision);
@@ -543,7 +544,10 @@ public sealed class RealtimeVoiceSession(
                 assistantText = UnsupportedLanguageResponse;
             else
             {
-                AiResponseResult response = await GenerateAsync(context, transcript, recognizedText, timing, operation.Token);
+                AgentLanguageContext languageContext = BuildAgentLanguageContext(
+                    languageDecision, priorLanguage);
+                AiResponseResult response = await GenerateAsync(
+                    context, transcript, recognizedText, timing, languageContext, operation.Token);
                 if (response.Failure is not null)
                     throw new VoicePipelineException(response.Failure.Code, response.Failure.SafeMessage);
                 assistantText = VoiceResponsePolicy.Constrain(
@@ -662,6 +666,7 @@ public sealed class RealtimeVoiceSession(
         IReadOnlyList<LiveTranscriptTurn> transcript,
         string callerText,
         TurnLatency timing,
+        AgentLanguageContext languageContext,
         CancellationToken cancellationToken)
     {
         using Activity? activity = PurpleGlassTelemetry.Calls.StartActivity("ai.generate", ActivityKind.Client);
@@ -679,10 +684,11 @@ public sealed class RealtimeVoiceSession(
             AiResponseResult result = await InvokeAsync(
                 "generate", options.LanguageModelTimeout,
                 token => languageModel.GenerateAsync(new AiResponseRequest(
-                    context, ActiveConfiguration, DentalAgentBehavior.Build(ActiveConfiguration),
+                    context, ActiveConfiguration, DentalAgentBehavior.Build(ActiveConfiguration, languageContext),
                     history, callerText, [],
                     new SafetyEscalationPolicy(options.Conversation.SafetyPolicyVersion,
-                        options.Conversation.EscalationKeywords, options.Conversation.UrgentKeywords)), token),
+                        options.Conversation.EscalationKeywords, options.Conversation.UrgentKeywords),
+                    languageContext), token),
                 value => value.Failure, cancellationToken);
             double durationMs = timeProvider.GetElapsedTime(startedAt).TotalMilliseconds;
             RecordLatency(timing, "llm_completed", startedAt, timeProvider.GetTimestamp(),
@@ -1397,6 +1403,18 @@ public sealed class RealtimeVoiceSession(
         ? "Actualmente puedo continuar en inglés o español."
         : "I can currently continue in English or Spanish.";
 
+    private AgentLanguageContext BuildAgentLanguageContext(
+        CallLanguageDecision decision,
+        string priorLanguage) => new(
+        ActiveLanguage,
+        SupportedCallLanguages.All.Select(language => language.Code).ToArray(),
+        decision.Accepted,
+        SupportedCallLanguages.Require(priorLanguage).Code,
+        SupportedCallLanguages.Require(ActiveLanguage).Code,
+        CallLanguageReasons.Normalize(decision.Reason),
+        decision.IsLanguageRequest && (decision.Accepted || decision.Result == "already_active"),
+        decision.Unsupported);
+
     private void RecordLanguageDecision(CallLanguageDecision decision)
     {
         string confidenceBucket = decision.Confidence switch
@@ -1422,7 +1440,13 @@ public sealed class RealtimeVoiceSession(
         diagnostics.RecordLanguage(new VoiceLanguageDiagnostic(
             identity!.CallId, identity.CorrelationId, languageState!.StartingLanguageCode,
             decision.ActiveLanguageCode, decision.Reason, decision.Result, confidenceBucket,
-            decision.AlternateEvidenceCount, decision.Accepted, decision.Unsupported, decision.Version));
+            decision.AlternateEvidenceCount, decision.Accepted, decision.Unsupported, decision.Version,
+            decision.RequestedLanguageCode ?? "none", decision.ActiveLanguageCode,
+            decision.Unsupported ? "application_generated"
+                : decision.IsLanguageRequest ? "agent_generated" : "none",
+            decision.Unsupported,
+            decision.Unsupported ? "application_fallback_matches_active"
+                : "instruction_matches_active"));
     }
 
     private static void ValidateIdentity(VoiceSessionIdentity identity, IRealtimeAudioTransport transport)

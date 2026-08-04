@@ -463,3 +463,13 @@ Current limitations are intentional:
 - Business-action tool execution is not implemented: there is no patient lookup, appointment action, insurance workflow, Open Dental access, RAG, or other authoritative dental capability.
 
 See [ADR 0010](../adr/0010-realtime-voice-conversation-pipeline.md) for the decision and tradeoffs.
+
+## Language-switch acknowledgement consistency
+
+Task 16.5 production validation found a conversational defect after an otherwise successful Spanish-to-English switch: the authoritative state, persisted language event, generated-response language, and TTS language changed to English, but the model first claimed it could not switch. The state transition was not at fault. The model had received the new configured language and the raw request, while its general instruction still allowed it to independently interpret language-change capability.
+
+The application language policy now remains the sole authority. Every realtime agent request carries bounded language context: normalized active and supported codes, prior/current language, accepted flag, bounded reason, acknowledgement-needed flag, and unsupported-fallback selection. An accepted-switch instruction states that the change already succeeded and forbids inability or unsupported-language claims. Prior conversation remains available for dental and caller context but cannot override this current authoritative state. Requests for the already-active language receive a separate instruction that permits an accurate “already speaking” acknowledgement without creating a language event.
+
+Genuinely unsupported requests remain on the existing application-owned localized fallback path, retain the current language, and do not invoke the agent or claim success. No application-owned acknowledgement was added for supported switches; the existing single agent response preserves streaming and conversation-turn semantics, now constrained by authoritative context. Realtime cancellation, Twilio clear, stale-generation suppression, language persistence, adaptive detection thresholds, and audio transport constants are unchanged.
+
+Language diagnostics must remain bounded and privacy-safe. Record only normalized language codes, accepted/reason/version state, acknowledgement source (`agent_generated`, `application_generated`, or `none`), unsupported-fallback selection, and a bounded response-language consistency result. Never log caller wording, transcripts, response text, prompts, audio, phone numbers, credentials, or patient information.

@@ -9,6 +9,16 @@ public sealed record ConversationAgentBehavior(
     IReadOnlySet<string> ConversationalCapabilities,
     IReadOnlySet<string> UnsupportedActions);
 
+public sealed record AgentLanguageContext(
+    string ActiveLanguageCode,
+    IReadOnlyList<string> SupportedLanguageCodes,
+    bool SwitchAccepted,
+    string PriorLanguageCode,
+    string CurrentLanguageCode,
+    string SwitchReason,
+    bool AcknowledgementNeeded,
+    bool UnsupportedFallbackSelected);
+
 public sealed record AiResponseRequest(
     RuntimeInvocationContext Context,
     ConversationRuntimeConfiguration Configuration,
@@ -16,7 +26,8 @@ public sealed record AiResponseRequest(
     IReadOnlyList<SanitizedConversationTurn> ExistingTurns,
     string CurrentCallerTurn,
     IReadOnlyList<AiToolDefinition> AvailableTools,
-    SafetyEscalationPolicy SafetyPolicy);
+    SafetyEscalationPolicy SafetyPolicy,
+    AgentLanguageContext? LanguageContext = null);
 
 public sealed record AiUsageMetadata(int InputUnits, int OutputUnits, string Meter = "synthetic-units");
 

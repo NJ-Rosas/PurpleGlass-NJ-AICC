@@ -200,6 +200,8 @@ These diagnostics deliberately exclude destination/phone numbers, transcript tex
 
 Before another billable validation, require the exact corrected commit, clean local/full gates, both Render services live and ready on that SHA, unchanged Blueprint/environment/plan/branch/auto-deploy settings, deterministic fake coverage for response shapes and cancellation races, and protected Twilio transport checks. Resume with the remaining controlled multilingual matrix only; do not repeat the passing Call 2 merely to generate more evidence, and do not claim the hardening works in production until that separate validation succeeds.
 
+Task 16.5.2 corrects the contradictory acknowledgement locally but is not an unconditional production pass. Before promotion, deploy the exact reviewed candidate for one narrowly scoped revalidation call: start or automatically arrive in Spanish, explicitly request English, confirm the acknowledgement agrees with the accepted switch, continue in English with prior dental context intact, and confirm no stale Spanish audio resumes. Require one persisted language event, one caller turn, one assistant response, one TTS dispatch, normal Twilio clear behavior during interruption, stable audio, and bounded language diagnostics. A repeated request for the active language must create no event; an unsupported request must retain the active language and accurately state that English and Spanish are supported. Do not inspect production PostgreSQL or log transcript/response/prompt content for this validation.
+
 For an existing Blueprint, use this exact workflow:
 
 1. Push the corrected Task 10 branch/commit. Sync the Blueprint only when that commit changes `render.yaml`; an application-only deploy does not require a no-op Blueprint sync.

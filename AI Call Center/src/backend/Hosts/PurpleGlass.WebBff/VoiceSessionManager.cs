@@ -191,7 +191,10 @@ public sealed partial class BffVoiceSessionDiagnostics(ILogger<BffVoiceSessionDi
             diagnostic.StartingLanguage, diagnostic.ActiveLanguage, diagnostic.Reason,
             diagnostic.DetectionResult, diagnostic.ConfidenceBucket,
             diagnostic.AlternateEvidenceCount, diagnostic.SwitchAccepted,
-            diagnostic.UnsupportedRequest, diagnostic.LanguageVersion);
+            diagnostic.UnsupportedRequest, diagnostic.LanguageVersion,
+            diagnostic.RequestedLanguage, diagnostic.AgentInstructionLanguage,
+            diagnostic.AcknowledgementSource, diagnostic.UnsupportedFallbackSelected,
+            diagnostic.ResponseLanguageConsistency);
 
     public void RecordSpeechRecognition(VoiceSpeechRecognitionDiagnostic diagnostic)
     {
@@ -277,11 +280,13 @@ public sealed partial class BffVoiceSessionDiagnostics(ILogger<BffVoiceSessionDi
         double durationMs, double elapsedFromEndpointMs, string adapter, string result);
 
     [LoggerMessage(211, LogLevel.Information,
-        "Call language decision; CallId={CallId}, CorrelationId={CorrelationId}, StartingLanguage={StartingLanguage}, ActiveLanguage={ActiveLanguage}, Reason={Reason}, DetectionResult={DetectionResult}, ConfidenceBucket={ConfidenceBucket}, AlternateEvidenceCount={AlternateEvidenceCount}, SwitchAccepted={SwitchAccepted}, UnsupportedRequest={UnsupportedRequest}, LanguageVersion={LanguageVersion}.")]
+        "Call language decision; CallId={CallId}, CorrelationId={CorrelationId}, StartingLanguage={StartingLanguage}, ActiveLanguage={ActiveLanguage}, Reason={Reason}, DetectionResult={DetectionResult}, ConfidenceBucket={ConfidenceBucket}, AlternateEvidenceCount={AlternateEvidenceCount}, SwitchAccepted={SwitchAccepted}, UnsupportedRequest={UnsupportedRequest}, LanguageVersion={LanguageVersion}, RequestedLanguage={RequestedLanguage}, AgentInstructionLanguage={AgentInstructionLanguage}, AcknowledgementSource={AcknowledgementSource}, UnsupportedFallbackSelected={UnsupportedFallbackSelected}, ResponseLanguageConsistency={ResponseLanguageConsistency}.")]
     private static partial void LogLanguage(ILogger logger, Guid callId, Guid correlationId,
         string startingLanguage, string activeLanguage, string reason, string detectionResult,
         string confidenceBucket, int alternateEvidenceCount, bool switchAccepted,
-        bool unsupportedRequest, long languageVersion);
+        bool unsupportedRequest, long languageVersion, string requestedLanguage,
+        string agentInstructionLanguage, string acknowledgementSource,
+        bool unsupportedFallbackSelected, string responseLanguageConsistency);
 
     [LoggerMessage(212, LogLevel.Information,
         "Speech recognition boundary; CallId={CallId}, ConversationId={ConversationId}, CorrelationId={CorrelationId}, TraceId={TraceId}, TurnId={TurnId}, Adapter={Adapter}, ProviderOperation={ProviderOperation}, Stage={Stage}, ResultCategory={ResultCategory}, HttpStatusCategory={HttpStatusCategory}, ContentTypeCategory={ContentTypeCategory}, ResponseShapeCategory={ResponseShapeCategory}, TranscriptPresent={TranscriptPresent}, LanguageMetadataPresent={LanguageMetadataPresent}, LanguageSupportCategory={LanguageSupportCategory}, CancellationRequested={CancellationRequested}, SessionClosing={SessionClosing}, CallerDisconnected={CallerDisconnected}, RetryAttempted={RetryAttempted}, RecoveryDecision={RecoveryDecision}.")]

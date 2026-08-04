@@ -81,14 +81,27 @@ public sealed class RealtimeVoicePipelineTests(DurablePathFixture fixture)
         await AssertCompletedAndDisposedAsync(harness, "media_disconnected");
     }
 
-    [Fact]
-    public async Task ExplicitLanguageRequestSwitchesGenerationAndSynthesisAndPersistsHistory()
+    [Theory]
+    [InlineData("en-US", "Please speak Spanish.", "es-US")]
+    [InlineData("es-US", "Please speak English.", "en-US")]
+    [InlineData("es-PR", "Háblame en inglés.", "en-US")]
+    [InlineData("en-US", "Cambia a español de Puerto Rico.", "es-PR")]
+    public async Task ExplicitLanguageRequestSwitchesGenerationAndSynthesisAndPersistsHistory(
+        string startingLanguage,
+        string callerRequest,
+        string targetLanguage)
     {
-        await using SessionHarness harness = await CreateHarnessAsync();
+        var languageModel = new ControlledAiRuntime((request, _) =>
+            request.LanguageContext?.CurrentLanguageCode.StartsWith("es", StringComparison.Ordinal) == true
+                ? "Claro, continuamos en español." : "Sure, I'll continue in English.");
+        await using SessionHarness harness = await CreateHarnessAsync(
+            languageModel: languageModel,
+            startingLanguageCode: startingLanguage,
+            startingLanguageReason: CallLanguageReasons.CallOverride);
         Task run = harness.Start();
         _ = await harness.States.WaitForAsync(change => change.State == VoiceSessionState.Listening);
 
-        await harness.Transport.QueueUtteranceAsync("Please speak Spanish.");
+        await harness.Transport.QueueUtteranceAsync(callerRequest);
         Task listening = harness.States.WaitForOccurrencesAsync(VoiceSessionState.Listening, 2);
         Assert.True(ReferenceEquals(listening, await Task.WhenAny(listening, run)),
             $"Session ended early: {string.Join(',', harness.Diagnostics.Exceptions.Select(item => $"{item.Stage}:{item.SafeCode}:{item.RootExceptionType}"))}");
@@ -96,13 +109,23 @@ public sealed class RealtimeVoicePipelineTests(DurablePathFixture fixture)
         harness.Transport.CompleteInput();
         await run.WaitAsync(TestTimeout);
 
-        Assert.Equal("es-US", Assert.Single(harness.LanguageModel.Requests).Configuration.Language);
-        Assert.Equal("es-US", harness.Synthesizer.Requests[1].Language);
+        AiResponseRequest request = Assert.Single(harness.LanguageModel.Requests);
+        Assert.Equal(targetLanguage, request.Configuration.Language);
+        Assert.NotNull(request.LanguageContext);
+        Assert.Equal(targetLanguage, request.LanguageContext.ActiveLanguageCode);
+        Assert.Equal(startingLanguage, request.LanguageContext.PriorLanguageCode);
+        Assert.Equal(targetLanguage, request.LanguageContext.CurrentLanguageCode);
+        Assert.True(request.LanguageContext.SwitchAccepted);
+        Assert.True(request.LanguageContext.AcknowledgementNeeded);
+        Assert.False(request.LanguageContext.UnsupportedFallbackSelected);
+        Assert.Equal(targetLanguage, harness.Synthesizer.Requests[1].Language);
+        Assert.DoesNotContain("cannot", harness.Synthesizer.Requests[1].Text, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("unsupported", harness.Synthesizer.Requests[1].Text, StringComparison.OrdinalIgnoreCase);
         ConversationDetails details = await ReadDetailsAsync(harness.TenantId, harness.CallId);
-        Assert.Equal("es-US", details.Language);
+        Assert.Equal(targetLanguage, details.Language);
         ConversationLanguageChangeProjection change = Assert.Single(details.LanguageChanges!);
-        Assert.Equal("en-US", change.PreviousLanguageCode);
-        Assert.Equal("es-US", change.LanguageCode);
+        Assert.Equal(startingLanguage, change.PreviousLanguageCode);
+        Assert.Equal(targetLanguage, change.LanguageCode);
         Assert.Equal(CallLanguageReasons.CallerExplicitRequest, change.Reason);
         await AssertCompletedAndDisposedAsync(harness, "media_disconnected");
     }
@@ -138,6 +161,72 @@ public sealed class RealtimeVoicePipelineTests(DurablePathFixture fixture)
         ConversationLanguageChangeProjection change = Assert.Single(details.LanguageChanges!);
         Assert.Equal(CallLanguageReasons.AutomaticDetection, change.Reason);
         Assert.Equal(0.96m, change.DetectionConfidence);
+        await AssertCompletedAndDisposedAsync(harness, "media_disconnected");
+    }
+
+    [Theory]
+    [InlineData("en-US", "Please speak English.")]
+    [InlineData("es-US", "Por favor, habla español.")]
+    public async Task AlreadyActiveLanguageRequestKeepsStateWithoutDuplicateEventOrInability(
+        string activeLanguage,
+        string callerRequest)
+    {
+        var languageModel = new ControlledAiRuntime((request, _) =>
+            request.Configuration.Language.StartsWith("es", StringComparison.Ordinal)
+                ? "Ya estamos hablando en español." : "We're already speaking English.");
+        await using SessionHarness harness = await CreateHarnessAsync(
+            languageModel: languageModel,
+            startingLanguageCode: activeLanguage,
+            startingLanguageReason: CallLanguageReasons.CallOverride);
+        Task run = harness.Start();
+        _ = await harness.States.WaitForAsync(change => change.State == VoiceSessionState.Listening);
+
+        await harness.Transport.QueueUtteranceAsync(callerRequest);
+        _ = await harness.States.WaitForOccurrencesAsync(VoiceSessionState.Listening, 2);
+        harness.Transport.CompleteInput();
+        await run.WaitAsync(TestTimeout);
+
+        AiResponseRequest request = Assert.Single(harness.LanguageModel.Requests);
+        Assert.Equal(activeLanguage, request.LanguageContext!.ActiveLanguageCode);
+        Assert.False(request.LanguageContext.SwitchAccepted);
+        Assert.True(request.LanguageContext.AcknowledgementNeeded);
+        Assert.False(request.LanguageContext.UnsupportedFallbackSelected);
+        Assert.DoesNotContain("cannot", harness.Synthesizer.Requests[1].Text, StringComparison.OrdinalIgnoreCase);
+        ConversationDetails details = await ReadDetailsAsync(harness.TenantId, harness.CallId);
+        Assert.Equal(activeLanguage, details.Language);
+        Assert.Empty(details.LanguageChanges!);
+        await AssertCompletedAndDisposedAsync(harness, "media_disconnected");
+    }
+
+    [Theory]
+    [InlineData("en-US", "Please speak French.", "I can currently continue in English or Spanish.")]
+    [InlineData("es-US", "Por favor, habla francés.", "Actualmente puedo continuar en inglés o español.")]
+    public async Task UnsupportedLanguageRequestRetainsStateAndUsesOnlyBoundedFallback(
+        string activeLanguage,
+        string callerRequest,
+        string expectedResponse)
+    {
+        await using SessionHarness harness = await CreateHarnessAsync(
+            startingLanguageCode: activeLanguage,
+            startingLanguageReason: CallLanguageReasons.CallOverride);
+        Task run = harness.Start();
+        _ = await harness.States.WaitForAsync(change => change.State == VoiceSessionState.Listening);
+
+        await harness.Transport.QueueUtteranceAsync(callerRequest);
+        _ = await harness.States.WaitForOccurrencesAsync(VoiceSessionState.Listening, 2);
+        harness.Transport.CompleteInput();
+        await run.WaitAsync(TestTimeout);
+
+        Assert.Empty(harness.LanguageModel.Requests);
+        Assert.Equal(expectedResponse, harness.Synthesizer.Requests[1].Text);
+        Assert.Equal(activeLanguage, harness.Synthesizer.Requests[1].Language);
+        ConversationDetails details = await ReadDetailsAsync(harness.TenantId, harness.CallId);
+        Assert.Equal(activeLanguage, details.Language);
+        Assert.Empty(details.LanguageChanges!);
+        VoiceLanguageDiagnostic diagnostic = Assert.Single(harness.Diagnostics.Languages);
+        Assert.True(diagnostic.UnsupportedRequest);
+        Assert.True(diagnostic.UnsupportedFallbackSelected);
+        Assert.Equal("application_generated", diagnostic.AcknowledgementSource);
         await AssertCompletedAndDisposedAsync(harness, "media_disconnected");
     }
 

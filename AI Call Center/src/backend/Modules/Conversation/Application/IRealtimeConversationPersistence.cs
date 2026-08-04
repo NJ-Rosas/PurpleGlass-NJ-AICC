@@ -135,7 +135,12 @@ public sealed record VoiceLanguageDiagnostic(
     int AlternateEvidenceCount,
     bool SwitchAccepted,
     bool UnsupportedRequest,
-    long LanguageVersion);
+    long LanguageVersion,
+    string RequestedLanguage,
+    string AgentInstructionLanguage,
+    string AcknowledgementSource,
+    bool UnsupportedFallbackSelected,
+    string ResponseLanguageConsistency);
 
 public sealed record VoiceSpeechRecognitionDiagnostic(
     Guid CallId,

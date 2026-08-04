@@ -72,6 +72,72 @@ public sealed class DentalAgentBehaviorTests
         Assert.Contains("do not guess", behavior.Instructions, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Theory]
+    [InlineData("en-US", "es-US", "Spanish (es-US)")]
+    [InlineData("es-US", "en-US", "English (en-US)")]
+    [InlineData("es-PR", "en-US", "English (en-US)")]
+    [InlineData("en-US", "es-PR", "Puerto Rico Spanish (es-PR)")]
+    public void AcceptedSwitchInstructionMakesApplicationStateAuthoritative(
+        string priorLanguage,
+        string currentLanguage,
+        string expectedLanguageName)
+    {
+        var context = new AgentLanguageContext(
+            currentLanguage, ["en-US", "es-US", "es-PR"], true,
+            priorLanguage, currentLanguage, CallLanguageReasons.CallerExplicitRequest,
+            true, false);
+
+        ConversationAgentBehavior behavior = DentalAgentBehavior.Build(
+            Configuration() with { Language = currentLanguage }, context);
+
+        Assert.Contains(expectedLanguageName, behavior.Instructions, StringComparison.Ordinal);
+        Assert.Contains("switch_accepted=true", behavior.Instructions, StringComparison.Ordinal);
+        Assert.Contains($"prior={priorLanguage}", behavior.Instructions, StringComparison.Ordinal);
+        Assert.Contains($"current={currentLanguage}", behavior.Instructions, StringComparison.Ordinal);
+        Assert.Contains("language switch already succeeded", behavior.Instructions, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Never say that the current language is unsupported", behavior.Instructions, StringComparison.Ordinal);
+        Assert.Contains("application, not you, decides", behavior.Instructions, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void AlreadyActiveRequestCannotBeTreatedAsUnsupported()
+    {
+        var context = new AgentLanguageContext(
+            "en-US", ["en-US", "es-US", "es-PR"], false,
+            "en-US", "en-US", CallLanguageReasons.CallerExplicitRequest,
+            true, false);
+
+        ConversationAgentBehavior behavior = DentalAgentBehavior.Build(Configuration(), context);
+
+        Assert.Contains("already-active supported language", behavior.Instructions, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("must not claim that it is unsupported", behavior.Instructions, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("unsupported_fallback_selected=false", behavior.Instructions, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AcceptedStateFollowsStaleCapabilityGuidanceAndCannotBeOverriddenByIt()
+    {
+        var context = new AgentLanguageContext(
+            "en-US", ["en-US", "es-US", "es-PR"], true,
+            "es-US", "en-US", CallLanguageReasons.CallerExplicitRequest,
+            true, false);
+        ConversationRuntimeConfiguration configuration = Configuration() with
+        {
+            Language = "en-US",
+            SystemPrompt = "Legacy guidance: only Spanish is available and English cannot be used.",
+        };
+
+        ConversationAgentBehavior behavior = DentalAgentBehavior.Build(configuration, context);
+
+        int staleGuidance = behavior.Instructions.IndexOf("Legacy guidance", StringComparison.Ordinal);
+        int authoritativeState = behavior.Instructions.IndexOf(
+            "Authoritative language state", StringComparison.Ordinal);
+        Assert.True(authoritativeState > staleGuidance);
+        Assert.Contains("active=en-US", behavior.Instructions, StringComparison.Ordinal);
+        Assert.Contains("language switch already succeeded", behavior.Instructions, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("cannot speak it", behavior.Instructions, StringComparison.OrdinalIgnoreCase);
+    }
+
     [Fact]
     public async Task DeterministicProviderMaintainsAppointmentContextAcrossTurns()
     {

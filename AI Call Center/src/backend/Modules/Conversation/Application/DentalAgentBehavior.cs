@@ -33,7 +33,9 @@ public static class DentalAgentBehavior
             "open_dental_operations",
         }.ToFrozenSet(StringComparer.Ordinal);
 
-    public static ConversationAgentBehavior Build(ConversationRuntimeConfiguration configuration)
+    public static ConversationAgentBehavior Build(
+        ConversationRuntimeConfiguration configuration,
+        AgentLanguageContext? languageContext = null)
     {
         ArgumentNullException.ThrowIfNull(configuration);
         configuration.Validate();
@@ -58,8 +60,10 @@ public static class DentalAgentBehavior
             configuration.Language, out SupportedCallLanguage language)
             ? $"{language.AgentLanguageName} ({language.Code})"
             : configuration.Language.Trim();
-        instructions.Append(CultureInfo.InvariantCulture,
-            $"Respond only in the configured call language {instructionLanguage} unless the caller clearly asks to change languages. Do not provide a bilingual translation unless requested. ");
+        instructions.Append(
+            $"The application-owned active call language is {instructionLanguage}. Respond only in this language. " +
+            "The application, not you, decides whether a language change is supported and updates the active language. Do not independently accept or reject a language switch from caller wording. " +
+            "Do not provide a bilingual translation unless requested. ");
 
         instructions.Append(
             "Understand common dental-office requests, including new or existing appointments, rescheduling, cancellation, dental concerns, office information, insurance, billing, general questions, human assistance, and urgent concerns. " +
@@ -81,10 +85,38 @@ public static class DentalAgentBehavior
             instructions.Append(CultureInfo.InvariantCulture,
                 $"Additional trusted PurpleGlass guidance: {configuration.SystemPrompt.Trim()} ");
 
+        // Keep current application-owned language state last so older configuration guidance
+        // cannot override an accepted switch.
+        AppendLanguageContext(instructions, languageContext);
+
         return new ConversationAgentBehavior(
             instructions.ToString().Trim(),
             ConversationalCapabilities,
             UnsupportedActions);
+    }
+
+    private static void AppendLanguageContext(StringBuilder instructions, AgentLanguageContext? context)
+    {
+        if (context is null) return;
+
+        SupportedCallLanguage active = SupportedCallLanguages.Require(context.ActiveLanguageCode);
+        SupportedCallLanguage prior = SupportedCallLanguages.Require(context.PriorLanguageCode);
+        SupportedCallLanguage current = SupportedCallLanguages.Require(context.CurrentLanguageCode);
+        string supported = string.Join(", ", context.SupportedLanguageCodes
+            .Select(code => SupportedCallLanguages.Require(code).Code));
+        instructions.Append(CultureInfo.InvariantCulture,
+            $"Authoritative language state for this turn: active={active.Code}; supported={supported}; " +
+            $"switch_accepted={context.SwitchAccepted.ToString().ToLowerInvariant()}; prior={prior.Code}; current={current.Code}; " +
+            $"reason={context.SwitchReason}; acknowledgement_needed={context.AcknowledgementNeeded.ToString().ToLowerInvariant()}; " +
+            $"unsupported_fallback_selected={context.UnsupportedFallbackSelected.ToString().ToLowerInvariant()}. ");
+
+        if (context.SwitchAccepted)
+            instructions.Append(
+                "The language switch already succeeded. Briefly acknowledge it only if natural, then continue in the current active language. " +
+                "Never say that the current language is unsupported, that you cannot speak it, or that the system cannot switch. Do not apologize for an inability that does not exist. Preserve conversation context. ");
+        else if (context.AcknowledgementNeeded && !context.UnsupportedFallbackSelected)
+            instructions.Append(
+                "The caller requested the already-active supported language. You may briefly say that you are already using it, and must not claim that it is unsupported or unavailable. ");
     }
 
     private static void AppendTrustedFact(StringBuilder instructions, string label, string value)
