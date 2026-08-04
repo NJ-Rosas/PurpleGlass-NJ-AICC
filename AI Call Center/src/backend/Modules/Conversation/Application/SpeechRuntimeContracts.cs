@@ -15,6 +15,17 @@ public sealed record SimulatedUtteranceInput(string Text, string? Simulation = n
 
 public sealed record RuntimeFailure(string Code, string SafeMessage, bool Retryable);
 
+public sealed record SpeechRecognitionResponseDiagnostic(
+    string ProviderOperation,
+    string Stage,
+    string ResultCategory,
+    string HttpStatusCategory,
+    string ContentTypeCategory,
+    string ResponseShapeCategory,
+    bool TranscriptPresent,
+    bool LanguageMetadataPresent,
+    string LanguageMetadataCategory);
+
 public sealed record AudioFormat(string Encoding, int SampleRateHz, int Channels, int BitsPerSample)
 {
     public static AudioFormat Pcm16(int sampleRateHz = 8_000, int channels = 1) =>
@@ -62,7 +73,8 @@ public sealed record SpeechRecognitionResult(
     bool IsFinal,
     RuntimeFailure? Failure = null,
     IReadOnlyList<string>? DetectedLanguages = null,
-    decimal? DetectionConfidence = null)
+    decimal? DetectionConfidence = null,
+    SpeechRecognitionResponseDiagnostic? ResponseDiagnostic = null)
 {
     public IReadOnlyList<string> DetectedLanguageCodes => DetectedLanguages ?? [];
 }

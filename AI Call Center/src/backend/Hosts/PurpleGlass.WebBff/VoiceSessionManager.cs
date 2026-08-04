@@ -193,6 +193,43 @@ public sealed partial class BffVoiceSessionDiagnostics(ILogger<BffVoiceSessionDi
             diagnostic.AlternateEvidenceCount, diagnostic.SwitchAccepted,
             diagnostic.UnsupportedRequest, diagnostic.LanguageVersion);
 
+    public void RecordSpeechRecognition(VoiceSpeechRecognitionDiagnostic diagnostic)
+    {
+        LogSpeechRecognition(logger, diagnostic.CallId, diagnostic.ConversationId,
+            diagnostic.CorrelationId, diagnostic.TraceId, diagnostic.TurnId,
+            diagnostic.Adapter, SafeSpeechCategory(diagnostic.ProviderOperation),
+            SafeSpeechCategory(diagnostic.Stage), SafeSpeechCategory(diagnostic.ResultCategory),
+            SafeSpeechCategory(diagnostic.HttpStatusCategory),
+            SafeSpeechCategory(diagnostic.ContentTypeCategory),
+            SafeSpeechCategory(diagnostic.ResponseShapeCategory),
+            diagnostic.TranscriptPresent, diagnostic.LanguageMetadataPresent,
+            SafeSpeechCategory(diagnostic.LanguageSupportCategory), diagnostic.CancellationRequested,
+            diagnostic.SessionClosing, diagnostic.CallerDisconnected,
+            diagnostic.RetryAttempted, SafeSpeechCategory(diagnostic.RecoveryDecision));
+    }
+
+    private static string SafeSpeechCategory(string value) => value switch
+    {
+        "audio_transcription" or "speech_recognition"
+            or "request_started" or "response_headers_received" or "response_parsing"
+            or "response_validation" or "response_completed" or "request_cancelled"
+            or "adapter_completed" or "adapter_failed"
+            or "success" or "empty_result" or "cancelled" or "stale_result"
+            or "provider_transient" or "provider_rejected" or "invalid_response_schema"
+            or "unsupported_detected_language" or "session_closing" or "caller_disconnected"
+            or "timeout" or "rate_limited" or "client_error" or "server_error"
+            or "json" or "event_stream" or "missing" or "unexpected"
+            or "valid" or "valid_empty_transcript" or "unexpected_content_type"
+            or "unexpected_root" or "unexpected_stream_event" or "provider_error_status"
+            or "provider_error_envelope" or "missing_text" or "wrong_text_type"
+            or "malformed_json" or "missing_final_event" or "duplicate_final_event"
+            or "transcript_too_large" or "response_too_large" or "network_failure"
+            or "not_received" or "not_provided" or "absent" or "supported"
+            or "unsupported" or "invalid" or "mixed" or "continue" or "discard_turn"
+            or "discard_stale_result" or "retry" or "end_turn" or "other" => value,
+        _ => "other",
+    };
+
     [LoggerMessage(204, LogLevel.Error,
         "Realtime voice session exception; CallId={CallId}, ConversationId={ConversationId}, TenantId={TenantId}, LocationId={LocationId}, Provider={Provider}, ProviderCallId={ProviderCallId}, CorrelationId={CorrelationId}, Stage={Stage}, SafeCode={SafeCode}, ExceptionType={ExceptionType}, RootExceptionType={RootExceptionType}.")]
     private static partial void LogSessionException(ILogger logger, Guid callId, Guid? conversationId,
@@ -245,6 +282,16 @@ public sealed partial class BffVoiceSessionDiagnostics(ILogger<BffVoiceSessionDi
         string startingLanguage, string activeLanguage, string reason, string detectionResult,
         string confidenceBucket, int alternateEvidenceCount, bool switchAccepted,
         bool unsupportedRequest, long languageVersion);
+
+    [LoggerMessage(212, LogLevel.Information,
+        "Speech recognition boundary; CallId={CallId}, ConversationId={ConversationId}, CorrelationId={CorrelationId}, TraceId={TraceId}, TurnId={TurnId}, Adapter={Adapter}, ProviderOperation={ProviderOperation}, Stage={Stage}, ResultCategory={ResultCategory}, HttpStatusCategory={HttpStatusCategory}, ContentTypeCategory={ContentTypeCategory}, ResponseShapeCategory={ResponseShapeCategory}, TranscriptPresent={TranscriptPresent}, LanguageMetadataPresent={LanguageMetadataPresent}, LanguageSupportCategory={LanguageSupportCategory}, CancellationRequested={CancellationRequested}, SessionClosing={SessionClosing}, CallerDisconnected={CallerDisconnected}, RetryAttempted={RetryAttempted}, RecoveryDecision={RecoveryDecision}.")]
+    private static partial void LogSpeechRecognition(ILogger logger, Guid callId, Guid? conversationId,
+        Guid correlationId, string traceId, string turnId, string adapter,
+        string providerOperation, string stage, string resultCategory,
+        string httpStatusCategory, string contentTypeCategory, string responseShapeCategory,
+        bool transcriptPresent, bool languageMetadataPresent, string languageSupportCategory,
+        bool cancellationRequested, bool sessionClosing, bool callerDisconnected,
+        bool retryAttempted, string recoveryDecision);
 }
 
 public sealed class VoiceSessionConflictException(string code) : Exception("A voice session is already active for this call.")

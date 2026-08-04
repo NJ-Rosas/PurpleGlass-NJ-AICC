@@ -596,9 +596,13 @@ public sealed class RealtimeVoicePipelineTests(DurablePathFixture fixture)
     [Fact]
     public async Task SpeechRecognitionFailurePublishesSafeFailureAndLeavesNoCallerTurn()
     {
-        var recognizer = new ControlledSpeechRecognizer(
-            failureOnInvocation: 1,
-            failure: new RuntimeFailure("speech_recognition_failed", "Speech recognition is unavailable.", false));
+        var recognizer = new ControlledSpeechRecognizer(resultResponse: (request, _) =>
+            new SpeechRecognitionResult(string.Empty, null, request.Language, null, null, false,
+                new RuntimeFailure("speech_recognition_response_invalid",
+                    "Speech recognition returned an invalid response.", false),
+                ResponseDiagnostic: new SpeechRecognitionResponseDiagnostic(
+                    "speech_recognition", "response_parsing", "invalid_response_schema",
+                    "success", "json", "missing_text", false, false, "absent")));
         await using SessionHarness harness = await CreateHarnessAsync(recognizer: recognizer);
         Task run = harness.Start();
         _ = await harness.States.WaitForAsync(change => change.State == VoiceSessionState.Listening);
@@ -610,13 +614,150 @@ public sealed class RealtimeVoicePipelineTests(DurablePathFixture fixture)
         harness.Transport.CompleteInput();
         await run.WaitAsync(TestTimeout);
 
-        Assert.Equal("speech_recognition_failed", failed.SafeCode);
+        Assert.Equal("speech_recognition_response_invalid", failed.SafeCode);
         Assert.Empty(harness.LanguageModel.Requests);
         Assert.Equal(FallbackResponse, harness.Synthesizer.Requests[1].Text);
+        VoiceSpeechRecognitionDiagnostic diagnostic = Assert.Single(harness.Diagnostics.SpeechRecognitions);
+        Assert.Equal("invalid_response_schema", diagnostic.ResultCategory);
+        Assert.Equal("missing_text", diagnostic.ResponseShapeCategory);
+        Assert.Equal("end_turn", diagnostic.RecoveryDecision);
+        Assert.False(diagnostic.TranscriptPresent);
         ConversationDetails details = await ReadDetailsAsync(harness.TenantId, harness.CallId);
         Assert.Single(details.Transcript);
         Assert.Equal("Assistant", details.Transcript[0].Speaker);
         await AssertCompletedAndDisposedAsync(harness, "media_disconnected");
+    }
+
+    [Fact]
+    public async Task TransientSpeechRecognitionFailureEndsOnlyTurnWithoutRetryAtOneAttemptDefault()
+    {
+        var recognizer = new ControlledSpeechRecognizer(resultResponse: (request, _) =>
+            new SpeechRecognitionResult(string.Empty, null, request.Language, null, null, false,
+                new RuntimeFailure("speech_recognition_unavailable",
+                    "Speech recognition is temporarily unavailable.", true),
+                ResponseDiagnostic: new SpeechRecognitionResponseDiagnostic(
+                    "speech_recognition", "response_headers_received", "provider_transient",
+                    "server_error", "json", "provider_error_status", false, false, "absent")));
+        await using SessionHarness harness = await CreateHarnessAsync(recognizer: recognizer);
+        Task run = harness.Start();
+        _ = await harness.States.WaitForAsync(change => change.State == VoiceSessionState.Listening);
+
+        await harness.Transport.QueueUtteranceAsync("Transient provider failure");
+        _ = await harness.States.WaitForAsync(change => change.State == VoiceSessionState.Failed);
+        _ = await harness.States.WaitForOccurrencesAsync(VoiceSessionState.Listening, 2);
+        harness.Transport.CompleteInput();
+        await run.WaitAsync(TestTimeout);
+
+        Assert.Single(recognizer.Requests);
+        Assert.Empty(harness.LanguageModel.Requests);
+        VoiceSpeechRecognitionDiagnostic diagnostic = Assert.Single(harness.Diagnostics.SpeechRecognitions);
+        Assert.Equal("provider_transient", diagnostic.ResultCategory);
+        Assert.False(diagnostic.RetryAttempted);
+        Assert.Equal("end_turn", diagnostic.RecoveryDecision);
+        ConversationDetails details = await ReadDetailsAsync(harness.TenantId, harness.CallId);
+        Assert.Single(details.Transcript);
+        await AssertCompletedAndDisposedAsync(harness, "media_disconnected");
+    }
+
+    [Fact]
+    public async Task FormerCallOneEmptyTranscriptionDiscardsOnlyThatTurnAndSessionContinues()
+    {
+        var recognizer = new ControlledSpeechRecognizer(resultResponse: (request, invocation) =>
+            invocation == 1
+                ? new SpeechRecognitionResult(string.Empty, null, request.Language, null, null, true,
+                    ResponseDiagnostic: new SpeechRecognitionResponseDiagnostic(
+                        "speech_recognition", "response_completed", "empty_result", "success",
+                        "event_stream", "valid_empty_transcript", false, false, "absent"))
+                : new SpeechRecognitionResult(
+                    Encoding.UTF8.GetString(request.AudioInput!.Audio.Span), 0.99m,
+                    request.Language, null, null, true));
+        await using SessionHarness harness = await CreateHarnessAsync(
+            recognizer: recognizer,
+            startingLanguageCode: "en-US",
+            startingLanguageReason: CallLanguageReasons.CallOverride);
+        Task run = harness.Start();
+        _ = await harness.States.WaitForAsync(change => change.State == VoiceSessionState.Listening);
+
+        await harness.Transport.QueueUtteranceAsync("Audio with no usable transcription");
+        await harness.Transport.QueueUtteranceAsync("Second turn succeeds");
+        _ = await harness.States.WaitForOccurrencesAsync(VoiceSessionState.Listening, 2);
+        harness.Transport.CompleteInput();
+        await run.WaitAsync(TestTimeout);
+
+        Assert.DoesNotContain(harness.States.Changes, change => change.State == VoiceSessionState.Failed);
+        Assert.Equal(2, harness.Recognizer.Requests.Count);
+        Assert.Single(harness.LanguageModel.Requests);
+        Assert.Equal("Second turn succeeds", harness.LanguageModel.Requests[0].CurrentCallerTurn);
+        VoiceSpeechRecognitionDiagnostic empty = Assert.Single(
+            harness.Diagnostics.SpeechRecognitions, item => item.ResultCategory == "empty_result");
+        Assert.Equal("discard_turn", empty.RecoveryDecision);
+        Assert.False(empty.TranscriptPresent);
+        ConversationDetails details = await ReadDetailsAsync(harness.TenantId, harness.CallId);
+        Assert.Equal([Greeting, "Second turn succeeds", "Hello from the assistant."],
+            details.Transcript.OrderBy(turn => turn.SequenceNumber).Select(turn => turn.Text).ToArray());
+        Assert.Empty(details.LanguageChanges!);
+        await AssertCompletedAndDisposedAsync(harness, "media_disconnected");
+    }
+
+    [Theory]
+    [InlineData(null, "absent")]
+    [InlineData("fr", "unsupported")]
+    public async Task MissingOrUnsupportedDetectedLanguageDoesNotRejectValidTranscript(
+        string? detectedLanguage,
+        string expectedSupportCategory)
+    {
+        var recognizer = new ControlledSpeechRecognizer(resultResponse: (request, _) =>
+            new SpeechRecognitionResult("Valid caller turn", 0.95m, request.Language, null, null, true,
+                DetectedLanguages: detectedLanguage is null ? [] : [detectedLanguage],
+                ResponseDiagnostic: new SpeechRecognitionResponseDiagnostic(
+                    "speech_recognition", "response_completed", "success", "success",
+                    "event_stream", "valid", true, detectedLanguage is not null,
+                    detectedLanguage is null ? "absent" : "present")));
+        await using SessionHarness harness = await CreateHarnessAsync(recognizer: recognizer);
+        Task run = harness.Start();
+        _ = await harness.States.WaitForAsync(change => change.State == VoiceSessionState.Listening);
+
+        await harness.Transport.QueueUtteranceAsync("Valid caller turn");
+        _ = await harness.States.WaitForOccurrencesAsync(VoiceSessionState.Listening, 2);
+        harness.Transport.CompleteInput();
+        await run.WaitAsync(TestTimeout);
+
+        Assert.Single(harness.LanguageModel.Requests);
+        Assert.DoesNotContain(harness.States.Changes, change => change.State == VoiceSessionState.Failed);
+        VoiceSpeechRecognitionDiagnostic diagnostic = Assert.Single(harness.Diagnostics.SpeechRecognitions);
+        Assert.Equal(expectedSupportCategory, diagnostic.LanguageSupportCategory);
+        Assert.Equal("continue", diagnostic.RecoveryDecision);
+        ConversationDetails details = await ReadDetailsAsync(harness.TenantId, harness.CallId);
+        Assert.Equal(GreetingCallerAssistantSpeakers,
+            details.Transcript.OrderBy(turn => turn.SequenceNumber).Select(turn => turn.Speaker).ToArray());
+        Assert.Empty(details.LanguageChanges!);
+        await AssertCompletedAndDisposedAsync(harness, "media_disconnected");
+    }
+
+    [Fact]
+    public async Task LateSpeechRecognitionCompletionAfterHangupIsDiscardedBeforePersistence()
+    {
+        var recognizer = new ControlledSpeechRecognizer(ignoreCancellationOnInvocation: 1);
+        await using SessionHarness harness = await CreateHarnessAsync(recognizer: recognizer);
+        Task run = harness.Start();
+        _ = await harness.States.WaitForAsync(change => change.State == VoiceSessionState.Listening);
+
+        await harness.Transport.QueueUtteranceAsync("Late provider response");
+        await recognizer.WaitForInvocationsAsync(1);
+        await harness.RequestHangupAsync();
+        recognizer.ReleaseIgnoredCancellation();
+        await run.WaitAsync(TestTimeout);
+
+        Assert.Empty(harness.LanguageModel.Requests);
+        Assert.Single(harness.Synthesizer.Requests);
+        Assert.DoesNotContain(harness.States.Changes, change => change.State == VoiceSessionState.Failed);
+        VoiceSpeechRecognitionDiagnostic diagnostic = Assert.Single(harness.Diagnostics.SpeechRecognitions);
+        Assert.True(diagnostic.CancellationRequested);
+        Assert.True(diagnostic.SessionClosing);
+        Assert.Equal("session_closing", diagnostic.RecoveryDecision);
+        ConversationDetails details = await ReadDetailsAsync(harness.TenantId, harness.CallId);
+        Assert.Single(details.Transcript);
+        await AssertCompletedAndDisposedAsync(harness, "hangup");
     }
 
     [Fact]
@@ -1264,6 +1405,7 @@ public sealed class RealtimeVoicePipelineTests(DurablePathFixture fixture)
         private readonly List<VoiceLatencyDiagnostic> latencies = [];
         private readonly List<VoiceSessionExceptionDiagnostic> exceptions = [];
         private readonly List<VoiceLanguageDiagnostic> languages = [];
+        private readonly List<VoiceSpeechRecognitionDiagnostic> speechRecognitions = [];
 
         public IReadOnlyList<VoiceLatencyDiagnostic> Latencies
         {
@@ -1280,6 +1422,11 @@ public sealed class RealtimeVoicePipelineTests(DurablePathFixture fixture)
             get { lock (synchronization) return languages.ToArray(); }
         }
 
+        public IReadOnlyList<VoiceSpeechRecognitionDiagnostic> SpeechRecognitions
+        {
+            get { lock (synchronization) return speechRecognitions.ToArray(); }
+        }
+
         public void RecordException(VoiceSessionExceptionDiagnostic diagnostic)
         {
             lock (synchronization) exceptions.Add(diagnostic);
@@ -1294,6 +1441,11 @@ public sealed class RealtimeVoicePipelineTests(DurablePathFixture fixture)
         {
             lock (synchronization) languages.Add(diagnostic);
         }
+
+        public void RecordSpeechRecognition(VoiceSpeechRecognitionDiagnostic diagnostic)
+        {
+            lock (synchronization) speechRecognitions.Add(diagnostic);
+        }
     }
 
     private sealed class ControlledSpeechRecognizer : ISpeechRecognizer
@@ -1304,6 +1456,9 @@ public sealed class RealtimeVoicePipelineTests(DurablePathFixture fixture)
         private readonly RuntimeFailure failure;
         private readonly Func<SpeechRecognitionRequest, int, string>? response;
         private readonly Func<SpeechRecognitionRequest, int, SpeechRecognitionResult>? resultResponse;
+        private readonly int? ignoreCancellationOnInvocation;
+        private readonly TaskCompletionSource ignoredCancellationRelease = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
         private int cancellationObserved;
 
         public ControlledSpeechRecognizer(
@@ -1311,7 +1466,8 @@ public sealed class RealtimeVoicePipelineTests(DurablePathFixture fixture)
             int? failureOnInvocation = null,
             RuntimeFailure? failure = null,
             Func<SpeechRecognitionRequest, int, string>? response = null,
-            Func<SpeechRecognitionRequest, int, SpeechRecognitionResult>? resultResponse = null)
+            Func<SpeechRecognitionRequest, int, SpeechRecognitionResult>? resultResponse = null,
+            int? ignoreCancellationOnInvocation = null)
         {
             this.blockOnInvocation = blockOnInvocation;
             this.failureOnInvocation = failureOnInvocation;
@@ -1319,18 +1475,22 @@ public sealed class RealtimeVoicePipelineTests(DurablePathFixture fixture)
                 "speech_recognition_failed", "Speech recognition is unavailable.", false);
             this.response = response;
             this.resultResponse = resultResponse;
+            this.ignoreCancellationOnInvocation = ignoreCancellationOnInvocation;
         }
 
         public string AdapterKey => "controlled-speech";
         public IReadOnlyList<SpeechRecognitionRequest> Requests => invocations.Snapshot;
         public bool CancellationObserved => Volatile.Read(ref cancellationObserved) == 1;
         public Task WaitForInvocationsAsync(int count) => invocations.WaitForCountAsync(count);
+        public void ReleaseIgnoredCancellation() => ignoredCancellationRelease.TrySetResult();
 
         public async Task<SpeechRecognitionResult> RecognizeAsync(
             SpeechRecognitionRequest request,
             CancellationToken cancellationToken)
         {
             int invocation = invocations.Add(request);
+            if (ignoreCancellationOnInvocation == invocation)
+                await ignoredCancellationRelease.Task;
             if (blockOnInvocation == invocation)
                 await BlockUntilCanceledAsync(cancellationToken);
             if (failureOnInvocation == invocation)

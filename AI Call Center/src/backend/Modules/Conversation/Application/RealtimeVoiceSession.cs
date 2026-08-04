@@ -477,6 +477,25 @@ public sealed class RealtimeVoiceSession(
                 Event: "stt_submitted"));
             RuntimeInvocationContext context = RuntimeContext(callerTurnId.Value);
             SpeechRecognitionResult recognition = await RecognizeAsync(context, utterance, timing, operation.Token);
+            operation.Token.ThrowIfCancellationRequested();
+            if (IsEmptyRecognition(recognition))
+            {
+                result = "empty_result";
+                diagnostics.RecordInboundTurn(new VoiceInboundTurnDiagnostic(
+                    sessionIdentity.CallId,
+                    sessionIdentity.CorrelationId,
+                    utterance.TurnId.ToString("N"),
+                    utterance.InboundFrames,
+                    (utterance.Duration ?? utterance.EndedAtUtc - utterance.StartedAtUtc).TotalMilliseconds,
+                    (utterance.QualifiedSpeechDuration ?? TimeSpan.Zero).TotalMilliseconds,
+                    utterance.NoiseFloor,
+                    utterance.EnergyMetric,
+                    SpeechQualified: true,
+                    SttSubmitted: true,
+                    DiscardReason: "empty_result",
+                    Event: "stt_discarded"));
+                return;
+            }
             if (recognition.Failure is not null)
                 throw new VoicePipelineException(recognition.Failure.Code, recognition.Failure.SafeMessage);
             string recognizedText = recognition.RecognizedText.Trim();
@@ -599,19 +618,43 @@ public sealed class RealtimeVoiceSession(
         long startedAt = timeProvider.GetTimestamp();
         RecordLatency(timing, "stt_request_started", startedAt, startedAt,
             speechRecognizer.AdapterKey, "started");
-        SpeechRecognitionResult result = await InvokeAsync(
-            "recognize", options.RecognitionTimeout,
-            token => speechRecognizer.RecognizeAsync(new SpeechRecognitionRequest(
-                context, ActiveLanguage, new SimulatedUtteranceInput(string.Empty),
-                new SpeechAudioInput(utterance.Format, utterance.Audio,
-                    $"{identity!.ProviderMediaStreamId}:{utterance.FirstSequence}:{utterance.LastSequence}")), token),
-            value => value.Failure, cancellationToken);
-        long completedAt = timeProvider.GetTimestamp();
-        PurpleGlassTelemetry.SpeechRecognitionDuration.Record(timeProvider.GetElapsedTime(startedAt, completedAt).TotalMilliseconds,
-            new KeyValuePair<string, object?>("adapter", speechRecognizer.AdapterKey));
-        RecordLatency(timing, "stt_completed", startedAt, completedAt,
-            speechRecognizer.AdapterKey, result.Failure?.Code ?? "success");
-        return result;
+        int observedResults = 0;
+        try
+        {
+            SpeechRecognitionResult result = await InvokeAsync(
+                "recognize", options.RecognitionTimeout,
+                token => speechRecognizer.RecognizeAsync(new SpeechRecognitionRequest(
+                    context, ActiveLanguage, new SimulatedUtteranceInput(string.Empty),
+                    new SpeechAudioInput(utterance.Format, utterance.Audio,
+                        $"{identity!.ProviderMediaStreamId}:{utterance.FirstSequence}:{utterance.LastSequence}")), token),
+                value => value.Failure,
+                cancellationToken,
+                (value, attempt) =>
+                {
+                    observedResults++;
+                    RecordSpeechRecognition(context, timing.TurnId, value, attempt, cancellationToken);
+                });
+            cancellationToken.ThrowIfCancellationRequested();
+            long completedAt = timeProvider.GetTimestamp();
+            PurpleGlassTelemetry.SpeechRecognitionDuration.Record(timeProvider.GetElapsedTime(startedAt, completedAt).TotalMilliseconds,
+                new KeyValuePair<string, object?>("adapter", speechRecognizer.AdapterKey));
+            RecordLatency(timing, "stt_completed", startedAt, completedAt,
+                speechRecognizer.AdapterKey, result.ResponseDiagnostic?.ResultCategory
+                    ?? result.Failure?.Code ?? "success");
+            return result;
+        }
+        catch (OperationCanceledException)
+        {
+            if (observedResults == 0)
+                RecordCanceledSpeechRecognition(context, timing.TurnId, cancellationToken);
+            throw;
+        }
+        catch (VoicePipelineException exception)
+        {
+            if (observedResults == 0)
+                RecordUnobservedSpeechRecognitionFailure(context, timing.TurnId, exception.Code, cancellationToken);
+            throw;
+        }
     }
 
     private async Task<AiResponseResult> GenerateAsync(
@@ -1003,7 +1046,8 @@ public sealed class RealtimeVoiceSession(
         TimeSpan timeout,
         Func<CancellationToken, Task<T>> invoke,
         Func<T, RuntimeFailure?> failure,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action<T, int>? observeResult = null)
     {
         RuntimeFailure? lastFailure = null;
         for (int attempt = 1; attempt <= options.MaximumProviderAttempts; attempt++)
@@ -1013,6 +1057,7 @@ public sealed class RealtimeVoiceSession(
             try
             {
                 T result = await invoke(timeoutSource.Token);
+                observeResult?.Invoke(result, attempt);
                 lastFailure = failure(result);
                 if (lastFailure is null) return result;
                 if (!lastFailure.Retryable || attempt == options.MaximumProviderAttempts)
@@ -1181,6 +1226,167 @@ public sealed class RealtimeVoiceSession(
             return SupportedCallLanguages.TryNormalize(ActiveLanguage, out SupportedCallLanguage active)
                 ? active.Greeting : SupportedCallLanguages.Fallback.Greeting;
         }
+    }
+
+    private void RecordSpeechRecognition(
+        RuntimeInvocationContext context,
+        Guid turnId,
+        SpeechRecognitionResult result,
+        int attempt,
+        CancellationToken cancellationToken)
+    {
+        SpeechRecognitionResponseDiagnostic? response = result.ResponseDiagnostic;
+        bool cancellationRequested = cancellationToken.IsCancellationRequested;
+        (bool sessionClosing, bool callerDisconnected) = SessionTerminationState();
+        string resultCategory = response?.ResultCategory
+            ?? (result.Failure is not null ? SafeRecognitionCategory(result.Failure.Code)
+                : IsEmptyRecognition(result) ? "empty_result" : "success");
+        string recoveryDecision = cancellationRequested
+            ? sessionClosing ? "session_closing" : "discard_stale_result"
+            : resultCategory == "empty_result" ? "discard_turn"
+            : result.Failure?.Retryable == true && attempt < options.MaximumProviderAttempts ? "retry"
+            : result.Failure is not null ? "end_turn"
+            : "continue";
+
+        diagnostics.RecordSpeechRecognition(new VoiceSpeechRecognitionDiagnostic(
+            context.CallId,
+            context.ConversationId,
+            context.CorrelationId,
+            SafeCode(context.TraceId ?? "none"),
+            turnId.ToString("N"),
+            SafeCode(speechRecognizer.AdapterKey),
+            SafeRecognitionOperation(response?.ProviderOperation),
+            SafeRecognitionStage(response?.Stage),
+            SafeRecognitionResultCategory(resultCategory),
+            SafeHttpStatusCategory(response?.HttpStatusCategory),
+            SafeContentTypeCategory(response?.ContentTypeCategory),
+            SafeResponseShapeCategory(response?.ResponseShapeCategory),
+            response?.TranscriptPresent ?? !string.IsNullOrWhiteSpace(result.RecognizedText),
+            response?.LanguageMetadataPresent ?? result.DetectedLanguageCodes.Count > 0,
+            LanguageSupportCategory(result, response),
+            cancellationRequested,
+            sessionClosing,
+            callerDisconnected,
+            RetryAttempted: attempt > 1,
+            recoveryDecision));
+    }
+
+    private void RecordCanceledSpeechRecognition(
+        RuntimeInvocationContext context,
+        Guid turnId,
+        CancellationToken cancellationToken)
+    {
+        (bool sessionClosing, bool callerDisconnected) = SessionTerminationState();
+        diagnostics.RecordSpeechRecognition(new VoiceSpeechRecognitionDiagnostic(
+            context.CallId, context.ConversationId, context.CorrelationId,
+            SafeCode(context.TraceId ?? "none"), turnId.ToString("N"),
+            SafeCode(speechRecognizer.AdapterKey), "speech_recognition", "request_cancelled",
+            sessionClosing ? "session_closing" : "cancelled", "not_received", "not_received",
+            "not_received", false, false, "absent",
+            CancellationRequested: cancellationToken.IsCancellationRequested,
+            sessionClosing, callerDisconnected, RetryAttempted: false,
+            sessionClosing ? "session_closing" : "discard_stale_result"));
+    }
+
+    private void RecordUnobservedSpeechRecognitionFailure(
+        RuntimeInvocationContext context,
+        Guid turnId,
+        string code,
+        CancellationToken cancellationToken)
+    {
+        (bool sessionClosing, bool callerDisconnected) = SessionTerminationState();
+        diagnostics.RecordSpeechRecognition(new VoiceSpeechRecognitionDiagnostic(
+            context.CallId, context.ConversationId, context.CorrelationId,
+            SafeCode(context.TraceId ?? "none"), turnId.ToString("N"),
+            SafeCode(speechRecognizer.AdapterKey), "speech_recognition", "adapter_failed",
+            SafeRecognitionCategory(code), "not_provided", "not_provided", "not_provided",
+            false, false, "absent", cancellationToken.IsCancellationRequested,
+            sessionClosing, callerDisconnected, RetryAttempted: false,
+            sessionClosing ? "session_closing" : "end_turn"));
+    }
+
+    private (bool SessionClosing, bool CallerDisconnected) SessionTerminationState()
+    {
+        lock (synchronization)
+        {
+            bool sessionClosing = sessionSource?.IsCancellationRequested == true;
+            bool callerDisconnected = sessionClosing && !stopRequested
+                && stopReason == "media_disconnected";
+            return (sessionClosing, callerDisconnected);
+        }
+    }
+
+    private static bool IsEmptyRecognition(SpeechRecognitionResult result) =>
+        result.Failure is null
+        && result.IsFinal
+        && string.IsNullOrWhiteSpace(result.RecognizedText);
+
+    private static string SafeRecognitionCategory(string code) => code switch
+    {
+        "speech_recognition_response_invalid" => "invalid_response_schema",
+        "speech_recognition_provider_rejected" => "provider_rejected",
+        "speech_recognition_timeout" or "speech_recognition_network_failed" => "provider_transient",
+        _ => "provider_rejected",
+    };
+
+    private static string SafeRecognitionOperation(string? value) => value switch
+    {
+        "audio_transcription" or "speech_recognition" => value,
+        _ => "other",
+    };
+
+    private static string SafeRecognitionStage(string? value) => value switch
+    {
+        "request_started" or "response_headers_received" or "response_parsing"
+            or "response_validation" or "response_completed" or "request_cancelled"
+            or "adapter_completed" or "adapter_failed" => value,
+        _ => "other",
+    };
+
+    private static string SafeRecognitionResultCategory(string? value) => value switch
+    {
+        "success" or "empty_result" or "cancelled" or "stale_result"
+            or "provider_transient" or "provider_rejected" or "invalid_response_schema"
+            or "unsupported_detected_language" or "session_closing" or "caller_disconnected" => value,
+        _ => "other",
+    };
+
+    private static string SafeHttpStatusCategory(string? value) => value switch
+    {
+        "success" or "timeout" or "rate_limited" or "client_error" or "server_error"
+            or "other" or "not_received" or "not_provided" => value,
+        _ => "other",
+    };
+
+    private static string SafeContentTypeCategory(string? value) => value switch
+    {
+        "json" or "event_stream" or "missing" or "unexpected" or "not_received"
+            or "not_provided" => value,
+        _ => "other",
+    };
+
+    private static string SafeResponseShapeCategory(string? value) => value switch
+    {
+        "valid" or "valid_empty_transcript" or "unexpected_content_type" or "unexpected_root"
+            or "unexpected_stream_event" or "provider_error_status" or "provider_error_envelope"
+            or "missing_text" or "wrong_text_type" or "malformed_json" or "missing_final_event"
+            or "duplicate_final_event" or "transcript_too_large" or "response_too_large"
+            or "timeout" or "network_failure" or "not_received" or "not_provided" => value,
+        _ => "other",
+    };
+
+    private string LanguageSupportCategory(
+        SpeechRecognitionResult result,
+        SpeechRecognitionResponseDiagnostic? response)
+    {
+        if (response?.LanguageMetadataPresent != true && result.DetectedLanguageCodes.Count == 0)
+            return "absent";
+        if (response?.LanguageMetadataCategory is "invalid" or "partially_invalid")
+            return "invalid";
+        if (result.DetectedLanguageCodes.Count > 1) return "mixed";
+        if (result.DetectedLanguageCodes.Count == 0) return "invalid";
+        return SupportedCallLanguages.FromDetectedCode(result.DetectedLanguageCodes[0], ActiveLanguage) is null
+            ? "unsupported" : "supported";
     }
 
     private string FallbackResponse => ActiveLanguage.StartsWith("es", StringComparison.OrdinalIgnoreCase)

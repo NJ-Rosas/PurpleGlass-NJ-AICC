@@ -36,6 +36,7 @@ public interface IVoiceSessionDiagnostics
     void RecordPlaybackEvent(VoicePlaybackEventDiagnostic diagnostic) { }
     void RecordLatency(VoiceLatencyDiagnostic diagnostic) { }
     void RecordLanguage(VoiceLanguageDiagnostic diagnostic) { }
+    void RecordSpeechRecognition(VoiceSpeechRecognitionDiagnostic diagnostic) { }
 }
 
 public sealed record ConversationModelTurnDiagnostic(
@@ -135,6 +136,28 @@ public sealed record VoiceLanguageDiagnostic(
     bool SwitchAccepted,
     bool UnsupportedRequest,
     long LanguageVersion);
+
+public sealed record VoiceSpeechRecognitionDiagnostic(
+    Guid CallId,
+    Guid? ConversationId,
+    Guid CorrelationId,
+    string TraceId,
+    string TurnId,
+    string Adapter,
+    string ProviderOperation,
+    string Stage,
+    string ResultCategory,
+    string HttpStatusCategory,
+    string ContentTypeCategory,
+    string ResponseShapeCategory,
+    bool TranscriptPresent,
+    bool LanguageMetadataPresent,
+    string LanguageSupportCategory,
+    bool CancellationRequested,
+    bool SessionClosing,
+    bool CallerDisconnected,
+    bool RetryAttempted,
+    string RecoveryDecision);
 
 public sealed record VoiceSessionExceptionDiagnostic(
     Guid CallId,

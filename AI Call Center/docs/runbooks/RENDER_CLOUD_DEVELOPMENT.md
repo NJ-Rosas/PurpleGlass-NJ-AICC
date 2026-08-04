@@ -183,6 +183,23 @@ For a future outbound 500, correlate the client trace/correlation identifiers wi
 
 This correction is local evidence only. It does not establish that multilingual voice behavior works in production; the controlled Task 16.5 deployment and call matrix must resume separately with the exact corrected SHA.
 
+### Task 16.5.1 isolated STT response diagnosis
+
+The resumed Task 16.5 matrix must preserve its two calls as distinct evidence. Call 1 reached finalized-audio STT and produced the bounded code `speech_recognition_response_invalid`; no caller turn was persisted for that utterance. Call 2 passed: the conversation completed and switched from English to Spanish successfully. Do not describe Call 2 as failed, and do not infer from it which response shape occurred in Call 1.
+
+The historical Call 1 logs cannot establish whether OpenAI returned an empty final transcript, malformed JSON/SSE, missing or wrongly typed final `text`, a missing final event, or another shape formerly mapped to the same code. Task 16.5.1 closes that observability gap locally. Search the BFF log for `Speech recognition boundary` and correlate by internal `CallId`, `CorrelationId`, `TraceId`, and `TurnId`. Then inspect these bounded fields:
+
+- `Stage`, `ResultCategory`, `HttpStatusCategory`, `ContentTypeCategory`, and `ResponseShapeCategory` localize the provider boundary without retaining its payload.
+- `TranscriptPresent`, `LanguageMetadataPresent`, and `LanguageSupportCategory` distinguish valid text, absent metadata, supported metadata, unsupported metadata, and invalid metadata without logging transcript or detected-language values.
+- `CancellationRequested`, `SessionClosing`, and `CallerDisconnected` distinguish provider/schema failures from hangup, media disconnect, and shutdown races.
+- `RetryAttempted` and `RecoveryDecision` show whether the attempt continued, ended the turn, discarded an empty/stale result, or observed session closure. Production still defaults to one provider attempt.
+
+A successful empty/whitespace final transcript now discards that utterance only. It creates no caller turn or language evidence, invokes no model or fallback TTS for the discarded turn, and leaves the session listening for later speech. A valid transcript with absent or unsupported detected-language metadata continues in the active language. Malformed/unsupported response shapes remain bounded failures. A result completing after cancellation is never persisted or dispatched downstream.
+
+These diagnostics deliberately exclude destination/phone numbers, transcript text, detected-language values, request or provider bodies, raw/Base64 audio, idempotency keys, prompts, cookies/tokens, API keys, credentials, patient data, arbitrary exception messages, and database values. Do not add any of those fields during incident response and do not inspect production PostgreSQL to diagnose this boundary.
+
+Before another billable validation, require the exact corrected commit, clean local/full gates, both Render services live and ready on that SHA, unchanged Blueprint/environment/plan/branch/auto-deploy settings, deterministic fake coverage for response shapes and cancellation races, and protected Twilio transport checks. Resume with the remaining controlled multilingual matrix only; do not repeat the passing Call 2 merely to generate more evidence, and do not claim the hardening works in production until that separate validation succeeds.
+
 For an existing Blueprint, use this exact workflow:
 
 1. Push the corrected Task 10 branch/commit. Sync the Blueprint only when that commit changes `render.yaml`; an application-only deploy does not require a no-op Blueprint sync.

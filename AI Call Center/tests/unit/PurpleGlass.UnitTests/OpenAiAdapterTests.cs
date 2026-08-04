@@ -254,15 +254,190 @@ public sealed class OpenAiAdapterTests
         Assert.False(multipart.Fields.ContainsKey("response_format"));
     }
 
+    [Theory]
+    [InlineData("", "absent")]
+    [InlineData("   ", "absent")]
+    public async Task RecognitionTreatsEmptySuccessfulTranscriptAsAnEmptyResult(
+        string transcript,
+        string expectedLanguageCategory)
+    {
+        using var httpClient = new HttpClient(new RecordingHttpMessageHandler((_, _) =>
+            Task.FromResult(JsonResponse(HttpStatusCode.OK,
+                JsonSerializer.Serialize(new { text = transcript })))));
+        var recognizer = new OpenAiSpeechRecognizer(httpClient, SpeechOptions());
+
+        SpeechRecognitionResult result = await recognizer.RecognizeAsync(
+            RecognitionRequest([0x01, 0x02]), default);
+
+        Assert.Null(result.Failure);
+        Assert.Equal(string.Empty, result.RecognizedText);
+        Assert.True(result.IsFinal);
+        Assert.Equal("empty_result", result.ResponseDiagnostic?.ResultCategory);
+        Assert.Equal("valid_empty_transcript", result.ResponseDiagnostic?.ResponseShapeCategory);
+        Assert.False(result.ResponseDiagnostic?.TranscriptPresent);
+        Assert.Equal(expectedLanguageCategory, result.ResponseDiagnostic?.LanguageMetadataCategory);
+    }
+
+    [Fact]
+    public async Task GptTranscribeAcceptsFinalTranscriptWithoutLanguageMetadata()
+    {
+        const string events = "data: {\"type\":\"transcript.text.done\",\"text\":\"Hello\"}\n\n";
+        using var httpClient = new HttpClient(new RecordingHttpMessageHandler((_, _) =>
+            Task.FromResult(EventStreamResponse(events))));
+        var recognizer = new OpenAiSpeechRecognizer(httpClient,
+            SpeechOptions() with { TranscriptionModel = "gpt-transcribe" });
+
+        SpeechRecognitionResult result = await recognizer.RecognizeAsync(
+            RecognitionRequest([0x01, 0x02]), default);
+
+        Assert.Null(result.Failure);
+        Assert.Equal("Hello", result.RecognizedText);
+        Assert.Empty(result.DetectedLanguageCodes);
+        Assert.False(result.ResponseDiagnostic?.LanguageMetadataPresent);
+        Assert.Equal("absent", result.ResponseDiagnostic?.LanguageMetadataCategory);
+    }
+
+    [Fact]
+    public async Task GptTranscribePreservesUnknownBoundedLanguageWithoutRejectingTranscript()
+    {
+        const string events = "data: {\"type\":\"transcript.text.done\",\"text\":\"Bonjour\",\"languages\":[{\"code\":\"fr\"}]}\n\n";
+        using var httpClient = new HttpClient(new RecordingHttpMessageHandler((_, _) =>
+            Task.FromResult(EventStreamResponse(events))));
+        var recognizer = new OpenAiSpeechRecognizer(httpClient,
+            SpeechOptions() with { TranscriptionModel = "gpt-transcribe" });
+
+        SpeechRecognitionResult result = await recognizer.RecognizeAsync(
+            RecognitionRequest([0x01, 0x02]), default);
+
+        Assert.Null(result.Failure);
+        Assert.Equal("Bonjour", result.RecognizedText);
+        Assert.Equal(["fr"], result.DetectedLanguageCodes);
+        Assert.Equal("present", result.ResponseDiagnostic?.LanguageMetadataCategory);
+    }
+
+    [Theory]
+    [InlineData("{}", "missing_text")]
+    [InlineData("{\"text\":42}", "wrong_text_type")]
+    [InlineData("not-json", "malformed_json")]
+    public async Task RecognitionClassifiesMalformedSuccessfulJson(
+        string responseBody,
+        string expectedShape)
+    {
+        using var httpClient = new HttpClient(new RecordingHttpMessageHandler((_, _) =>
+            Task.FromResult(JsonResponse(HttpStatusCode.OK, responseBody))));
+        var recognizer = new OpenAiSpeechRecognizer(httpClient, SpeechOptions());
+
+        SpeechRecognitionResult result = await recognizer.RecognizeAsync(
+            RecognitionRequest([0x01, 0x02]), default);
+
+        Assert.Equal("speech_recognition_response_invalid", result.Failure?.Code);
+        Assert.Equal("invalid_response_schema", result.ResponseDiagnostic?.ResultCategory);
+        Assert.Equal(expectedShape, result.ResponseDiagnostic?.ResponseShapeCategory);
+    }
+
+    [Fact]
+    public async Task RecognitionRejectsUnexpectedSuccessContentTypeBeforeParsing()
+    {
+        using var httpClient = new HttpClient(new RecordingHttpMessageHandler((_, _) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("plain response", Encoding.UTF8, "text/plain"),
+            })));
+        var recognizer = new OpenAiSpeechRecognizer(httpClient, SpeechOptions());
+
+        SpeechRecognitionResult result = await recognizer.RecognizeAsync(
+            RecognitionRequest([0x01, 0x02]), default);
+
+        Assert.Equal("speech_recognition_response_invalid", result.Failure?.Code);
+        Assert.Equal("unexpected_content_type", result.ResponseDiagnostic?.ResponseShapeCategory);
+        Assert.Equal("unexpected", result.ResponseDiagnostic?.ContentTypeCategory);
+    }
+
+    [Fact]
+    public async Task RecognitionClassifiesProviderErrorEnvelopeReturnedWithHttpSuccess()
+    {
+        using var httpClient = new HttpClient(new RecordingHttpMessageHandler((_, _) =>
+            Task.FromResult(JsonResponse(HttpStatusCode.OK, "{\"error\":{\"message\":\"sensitive\"}}"))));
+        var recognizer = new OpenAiSpeechRecognizer(httpClient, SpeechOptions());
+
+        SpeechRecognitionResult result = await recognizer.RecognizeAsync(
+            RecognitionRequest([0x01, 0x02]), default);
+
+        Assert.Equal("speech_recognition_provider_rejected", result.Failure?.Code);
+        Assert.Equal("provider_rejected", result.ResponseDiagnostic?.ResultCategory);
+        Assert.Equal("provider_error_envelope", result.ResponseDiagnostic?.ResponseShapeCategory);
+        Assert.DoesNotContain("sensitive", result.Failure?.SafeMessage, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task GptTranscribeRejectsDuplicateFinalCompletion()
+    {
+        const string events = "data: {\"type\":\"transcript.text.done\",\"text\":\"First\"}\n\n"
+            + "data: {\"type\":\"transcript.text.done\",\"text\":\"Second\"}\n\n";
+        using var httpClient = new HttpClient(new RecordingHttpMessageHandler((_, _) =>
+            Task.FromResult(EventStreamResponse(events))));
+        var recognizer = new OpenAiSpeechRecognizer(httpClient,
+            SpeechOptions() with { TranscriptionModel = "gpt-transcribe" });
+
+        SpeechRecognitionResult result = await recognizer.RecognizeAsync(
+            RecognitionRequest([0x01, 0x02]), default);
+
+        Assert.Equal("speech_recognition_response_invalid", result.Failure?.Code);
+        Assert.Equal("duplicate_final_event", result.ResponseDiagnostic?.ResponseShapeCategory);
+    }
+
+    [Fact]
+    public async Task RecognitionPropagatesCallerCancellation()
+    {
+        var handler = new RecordingHttpMessageHandler(async (_, cancellationToken) =>
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            throw new InvalidOperationException("unreachable");
+        });
+        using var httpClient = new HttpClient(handler);
+        var recognizer = new OpenAiSpeechRecognizer(httpClient, SpeechOptions());
+        using var cancellation = new CancellationTokenSource();
+
+        Task<SpeechRecognitionResult> operation = recognizer.RecognizeAsync(
+            RecognitionRequest([0x01, 0x02]), cancellation.Token);
+        await handler.RequestStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => operation);
+    }
+
+    [Fact]
+    public async Task RecognitionPropagatesCancellationAfterResponseHeaders()
+    {
+        var responseStream = new CancellationBlockingStream();
+        var handler = new RecordingHttpMessageHandler((_, _) =>
+        {
+            var content = new StreamContent(responseStream);
+            content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = content });
+        });
+        using var httpClient = new HttpClient(handler);
+        var recognizer = new OpenAiSpeechRecognizer(httpClient, SpeechOptions());
+        using var cancellation = new CancellationTokenSource();
+
+        Task<SpeechRecognitionResult> operation = recognizer.RecognizeAsync(
+            RecognitionRequest([0x01, 0x02]), cancellation.Token);
+        await responseStream.ReadStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => operation);
+    }
+
     [Fact]
     public async Task RecognitionRejectsOversizedResponse()
     {
         const int maximumBytes = 1024;
         using var httpClient = new HttpClient(new RecordingHttpMessageHandler((_, _) =>
-            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new ByteArrayContent(new byte[maximumBytes + 1]),
-            })));
+        {
+            var content = new ByteArrayContent(new byte[maximumBytes + 1]);
+            content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = content });
+        }));
         var recognizer = new OpenAiSpeechRecognizer(httpClient, SpeechOptions() with
         {
             MaximumTranscriptionResponseBytes = maximumBytes,
@@ -531,6 +706,11 @@ public sealed class OpenAiAdapterTests
         Content = new StringContent(json, Encoding.UTF8, "application/json"),
     };
 
+    private static HttpResponseMessage EventStreamResponse(string events) => new(HttpStatusCode.OK)
+    {
+        Content = new StringContent(events, Encoding.UTF8, "text/event-stream"),
+    };
+
     private static void AssertBearerAuthentication(HttpRequestHeaders headers, string expectedToken)
     {
         Assert.Equal("Bearer", headers.Authorization?.Scheme);
@@ -607,6 +787,37 @@ public sealed class OpenAiAdapterTests
             InvocationCount++;
             RequestStarted.TrySetResult();
             return responder(request, cancellationToken);
+        }
+    }
+
+    private sealed class CancellationBlockingStream : Stream
+    {
+        public TaskCompletionSource ReadStarted { get; } = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush() { }
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        public override async ValueTask<int> ReadAsync(
+            Memory<byte> buffer,
+            CancellationToken cancellationToken = default)
+        {
+            ReadStarted.TrySetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            return 0;
         }
     }
 }
