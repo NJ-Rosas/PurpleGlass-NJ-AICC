@@ -87,6 +87,12 @@
           "Microsoft.IdentityModel.Tokens": "8.3.1"
         }
       },
+      "purpleglass.adapters.practicemanagement.deterministic": {
+        "type": "Project",
+        "dependencies": {
+          "PurpleGlass.Modules.Scheduling.Application": "[1.0.0, )"
+        }
+      },
       "purpleglass.adapters.telephony.fake": {
         "type": "Project",
         "dependencies": {
@@ -120,6 +126,34 @@
           "Microsoft.EntityFrameworkCore": "[10.0.10, )",
           "Npgsql.EntityFrameworkCore.PostgreSQL": "[10.0.0, )",
           "PurpleGlass.Eventing": "[1.0.0, )",
+          "PurpleGlass.Observability": "[1.0.0, )"
+        }
+      },
+      "purpleglass.modules.audit.application": {
+        "type": "Project",
+        "dependencies": {
+          "PurpleGlass.Application.Abstractions": "[1.0.0, )",
+          "PurpleGlass.Modules.Audit.Contracts": "[1.0.0, )",
+          "PurpleGlass.Modules.Audit.Domain": "[1.0.0, )"
+        }
+      },
+      "purpleglass.modules.audit.contracts": {
+        "type": "Project"
+      },
+      "purpleglass.modules.audit.domain": {
+        "type": "Project",
+        "dependencies": {
+          "PurpleGlass.SharedKernel": "[1.0.0, )"
+        }
+      },
+      "purpleglass.modules.audit.infrastructure": {
+        "type": "Project",
+        "dependencies": {
+          "Microsoft.EntityFrameworkCore": "[10.0.10, )",
+          "Microsoft.EntityFrameworkCore.Relational": "[10.0.10, )",
+          "PurpleGlass.Eventing": "[1.0.0, )",
+          "PurpleGlass.Modules.Audit.Application": "[1.0.0, )",
+          "PurpleGlass.Modules.Audit.Domain": "[1.0.0, )",
           "PurpleGlass.Observability": "[1.0.0, )"
         }
       },
@@ -167,6 +201,62 @@
         "type": "Project",
         "dependencies": {
           "PurpleGlass.SharedKernel": "[1.0.0, )"
+        }
+      },
+      "purpleglass.modules.scheduling.application": {
+        "type": "Project",
+        "dependencies": {
+          "PurpleGlass.Application.Abstractions": "[1.0.0, )",
+          "PurpleGlass.Eventing": "[1.0.0, )",
+          "PurpleGlass.Modules.Scheduling.Contracts": "[1.0.0, )",
+          "PurpleGlass.Modules.Scheduling.Domain": "[1.0.0, )"
+        }
+      },
+      "purpleglass.modules.scheduling.contracts": {
+        "type": "Project"
+      },
+      "purpleglass.modules.scheduling.domain": {
+        "type": "Project"
+      },
+      "purpleglass.modules.scheduling.infrastructure": {
+        "type": "Project",
+        "dependencies": {
+          "Microsoft.EntityFrameworkCore": "[10.0.10, )",
+          "Npgsql.EntityFrameworkCore.PostgreSQL": "[10.0.0, )",
+          "PurpleGlass.Eventing": "[1.0.0, )",
+          "PurpleGlass.Modules.Scheduling.Application": "[1.0.0, )",
+          "PurpleGlass.Modules.Scheduling.Domain": "[1.0.0, )"
+        }
+      },
+      "purpleglass.modules.tenancy.application": {
+        "type": "Project",
+        "dependencies": {
+          "PurpleGlass.Application.Abstractions": "[1.0.0, )",
+          "PurpleGlass.Eventing": "[1.0.0, )",
+          "PurpleGlass.Modules.Audit.Application": "[1.0.0, )",
+          "PurpleGlass.Modules.Tenancy.Contracts": "[1.0.0, )",
+          "PurpleGlass.Modules.Tenancy.Domain": "[1.0.0, )"
+        }
+      },
+      "purpleglass.modules.tenancy.contracts": {
+        "type": "Project"
+      },
+      "purpleglass.modules.tenancy.domain": {
+        "type": "Project",
+        "dependencies": {
+          "PurpleGlass.SharedKernel": "[1.0.0, )"
+        }
+      },
+      "purpleglass.modules.tenancy.infrastructure": {
+        "type": "Project",
+        "dependencies": {
+          "Microsoft.EntityFrameworkCore": "[10.0.10, )",
+          "Npgsql.EntityFrameworkCore.PostgreSQL": "[10.0.0, )",
+          "PurpleGlass.Eventing": "[1.0.0, )",
+          "PurpleGlass.Modules.Audit.Infrastructure": "[1.0.0, )",
+          "PurpleGlass.Modules.Tenancy.Application": "[1.0.0, )",
+          "PurpleGlass.Modules.Tenancy.Domain": "[1.0.0, )",
+          "PurpleGlass.Observability": "[1.0.0, )"
         }
       },
       "purpleglass.observability": {

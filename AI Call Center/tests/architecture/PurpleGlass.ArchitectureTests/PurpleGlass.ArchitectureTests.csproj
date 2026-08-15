@@ -20,6 +20,11 @@
     <ProjectReference Include="..\..\..\src\backend\Adapters\Audio\PurpleGlass.Adapters.Audio.Fake\PurpleGlass.Adapters.Audio.Fake.csproj" />
     <ProjectReference Include="..\..\..\src\backend\Adapters\AI\PurpleGlass.Adapters.AI.OpenAI\PurpleGlass.Adapters.AI.OpenAI.csproj" />
     <ProjectReference Include="..\..\..\src\backend\Adapters\Speech\PurpleGlass.Adapters.Speech.OpenAI\PurpleGlass.Adapters.Speech.OpenAI.csproj" />
+    <ProjectReference Include="..\..\..\src\backend\Modules\Scheduling\Domain\PurpleGlass.Modules.Scheduling.Domain.csproj" />
+    <ProjectReference Include="..\..\..\src\backend\Modules\Scheduling\Application\PurpleGlass.Modules.Scheduling.Application.csproj" />
+    <ProjectReference Include="..\..\..\src\backend\Modules\Scheduling\Contracts\PurpleGlass.Modules.Scheduling.Contracts.csproj" />
+    <ProjectReference Include="..\..\..\src\backend\Modules\Scheduling\Infrastructure\PurpleGlass.Modules.Scheduling.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\..\src\backend\Adapters\PracticeManagement\PurpleGlass.Adapters.PracticeManagement.Deterministic\PurpleGlass.Adapters.PracticeManagement.Deterministic.csproj" />
   </ItemGroup>
 
   <ItemGroup>

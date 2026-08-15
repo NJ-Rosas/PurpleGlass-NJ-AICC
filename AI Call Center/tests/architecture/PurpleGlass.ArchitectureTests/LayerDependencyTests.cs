@@ -21,6 +21,11 @@ using PurpleGlass.Modules.Tenancy.Application;
 using PurpleGlass.Modules.Tenancy.Domain;
 using PurpleGlass.Adapters.Telephony.Fake;
 using PurpleGlass.Adapters.Telephony.Twilio;
+using PurpleGlass.Modules.Scheduling.Domain;
+using PurpleGlass.Modules.Scheduling.Application;
+using PurpleGlass.Modules.Scheduling.Contracts;
+using PurpleGlass.Modules.Scheduling.Infrastructure;
+using PurpleGlass.Adapters.PracticeManagement.Deterministic;
 
 namespace PurpleGlass.ArchitectureTests;
 
@@ -33,6 +38,7 @@ public sealed class LayerDependencyTests
         typeof(CallManagementDomainAssembly).Assembly,
         typeof(ConversationDomainAssembly).Assembly,
         typeof(IdentityDomainAssembly).Assembly,
+        typeof(SchedulingDomainAssembly).Assembly,
     ];
 
     private static readonly Assembly[] ApplicationAssemblies =
@@ -42,18 +48,21 @@ public sealed class LayerDependencyTests
         typeof(CallManagementApplicationAssembly).Assembly,
         typeof(ConversationApplicationAssembly).Assembly,
         typeof(IdentityApplicationAssembly).Assembly,
+        typeof(SchedulingService).Assembly,
     ];
 
     private static readonly Assembly[] InfrastructureAssemblies =
     [
         typeof(CallManagementInfrastructureAssembly).Assembly,
         typeof(ConversationInfrastructureAssembly).Assembly,
+        typeof(SchedulingInfrastructureAssembly).Assembly,
     ];
 
     private static readonly Assembly[] ContractAssemblies =
     [
         typeof(CallReceived).Assembly,
         typeof(ConversationStarted).Assembly,
+        typeof(SchedulingContractsAssembly).Assembly,
     ];
 
     [Fact]
@@ -170,6 +179,15 @@ public sealed class LayerDependencyTests
             ["Twilio", "Microsoft.EntityFrameworkCore", "Npgsql", ".Infrastructure"]);
         Assert.Contains(typeof(TwilioTelephonyProvider).Assembly.GetReferencedAssemblies(),
             reference => reference.Name == "Twilio");
+    }
+
+    [Fact]
+    public void DeterministicPracticeManagementImplementsMinimalNeutralPortAndIsIsolated()
+    {
+        Assert.True(typeof(IPracticeManagementSystem).IsAssignableFrom(typeof(DeterministicPracticeManagementSystem)));
+        Assert.Equal(3, typeof(IPracticeManagementSystem).GetMethods().Count(method => method.Name.EndsWith("Async", StringComparison.Ordinal)));
+        AssertAssembliesDoNotReference([typeof(DeterministicPracticeManagementAssembly).Assembly],["Microsoft.EntityFrameworkCore","Npgsql","OpenDental","Twilio",".Infrastructure"]);
+        AssertAssembliesDoNotReference([typeof(SchedulingDomainAssembly).Assembly],["CallManagement","Conversation","PurpleGlass.Adapters"]);
     }
 
     [Fact]

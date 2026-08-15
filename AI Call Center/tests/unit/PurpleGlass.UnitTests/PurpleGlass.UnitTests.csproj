@@ -41,6 +41,9 @@
     <ProjectReference Include="..\..\..\src\backend\Adapters\Telephony\PurpleGlass.Adapters.Telephony.Fake\PurpleGlass.Adapters.Telephony.Fake.csproj" />
     <ProjectReference Include="..\..\..\src\backend\Adapters\Telephony\PurpleGlass.Adapters.Telephony.Twilio\PurpleGlass.Adapters.Telephony.Twilio.csproj" />
     <ProjectReference Include="..\..\..\src\backend\Adapters\Audio\PurpleGlass.Adapters.Audio.Fake\PurpleGlass.Adapters.Audio.Fake.csproj" />
+    <ProjectReference Include="..\..\..\src\backend\Modules\Scheduling\Domain\PurpleGlass.Modules.Scheduling.Domain.csproj" />
+    <ProjectReference Include="..\..\..\src\backend\Modules\Scheduling\Application\PurpleGlass.Modules.Scheduling.Application.csproj" />
+    <ProjectReference Include="..\..\..\src\backend\Adapters\PracticeManagement\PurpleGlass.Adapters.PracticeManagement.Deterministic\PurpleGlass.Adapters.PracticeManagement.Deterministic.csproj" />
   </ItemGroup>
 
 </Project>

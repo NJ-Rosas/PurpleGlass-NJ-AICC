@@ -627,6 +627,31 @@
           "PurpleGlass.Modules.Conversation.Domain": "[1.0.0, )"
         }
       },
+      "purpleglass.modules.scheduling.application": {
+        "type": "Project",
+        "dependencies": {
+          "PurpleGlass.Application.Abstractions": "[1.0.0, )",
+          "PurpleGlass.Eventing": "[1.0.0, )",
+          "PurpleGlass.Modules.Scheduling.Contracts": "[1.0.0, )",
+          "PurpleGlass.Modules.Scheduling.Domain": "[1.0.0, )"
+        }
+      },
+      "purpleglass.modules.scheduling.contracts": {
+        "type": "Project"
+      },
+      "purpleglass.modules.scheduling.domain": {
+        "type": "Project"
+      },
+      "purpleglass.modules.scheduling.infrastructure": {
+        "type": "Project",
+        "dependencies": {
+          "Microsoft.EntityFrameworkCore": "[10.0.10, )",
+          "Npgsql.EntityFrameworkCore.PostgreSQL": "[10.0.0, )",
+          "PurpleGlass.Eventing": "[1.0.0, )",
+          "PurpleGlass.Modules.Scheduling.Application": "[1.0.0, )",
+          "PurpleGlass.Modules.Scheduling.Domain": "[1.0.0, )"
+        }
+      },
       "purpleglass.modules.tenancy.application": {
         "type": "Project",
         "dependencies": {

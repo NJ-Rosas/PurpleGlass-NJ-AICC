@@ -4,6 +4,7 @@ using PurpleGlass.Eventing.Infrastructure;
 using PurpleGlass.Modules.CallManagement.Infrastructure;
 using PurpleGlass.Modules.Conversation.Infrastructure;
 using PurpleGlass.Modules.Tenancy.Infrastructure;
+using PurpleGlass.Modules.Scheduling.Infrastructure;
 
 namespace PurpleGlass.IntegrationTests;
 
@@ -32,6 +33,8 @@ public class DurablePathFixture : IAsyncLifetime
         await calls.Database.MigrateAsync();
         await using ConversationDbContext conversations = CreateConversations();
         await conversations.Database.MigrateAsync();
+        await using SchedulingDbContext scheduling = CreateScheduling();
+        await scheduling.Database.MigrateAsync();
         await PrototypeSeed.ApplyAsync(tenancy, CancellationToken.None);
     }
 
@@ -48,6 +51,7 @@ public class DurablePathFixture : IAsyncLifetime
     public EventingDbContext CreateEventing() => new(new DbContextOptionsBuilder<EventingDbContext>().UseNpgsql(ConnectionString).Options);
     public CallManagementDbContext CreateCalls() => new(new DbContextOptionsBuilder<CallManagementDbContext>().UseNpgsql(ConnectionString).Options);
     public ConversationDbContext CreateConversations() => new(new DbContextOptionsBuilder<ConversationDbContext>().UseNpgsql(ConnectionString).Options);
+    public SchedulingDbContext CreateScheduling() => new(new DbContextOptionsBuilder<SchedulingDbContext>().UseNpgsql(ConnectionString).Options);
 }
 
 [CollectionDefinition(Name)]

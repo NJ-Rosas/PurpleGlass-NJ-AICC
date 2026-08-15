@@ -10,6 +10,12 @@ using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
+using PurpleGlass.Modules.Scheduling.Application;
+using PurpleGlass.Modules.Scheduling.Infrastructure;
+using PurpleGlass.Adapters.PracticeManagement.Deterministic;
+using PurpleGlass.Application.Abstractions;
+using PurpleGlass.Modules.Tenancy.Infrastructure;
+using PurpleGlass.Modules.Audit.Application;
 
 var builder = WebApplication.CreateBuilder(args);
 if (int.TryParse(builder.Configuration["PORT"], out int renderPort) && renderPort is > 0 and <= 65535)
@@ -19,6 +25,15 @@ string connectionString = builder.Configuration.RequireConnectionString();
 
 builder.Services.AddEventingInfrastructure(connectionString);
 builder.Services.AddCallManagementInfrastructure(connectionString);
+builder.Services.AddSchedulingInfrastructure(connectionString);
+builder.Services.AddTenancyInfrastructure(connectionString);
+builder.Services.AddScoped<SecurityAuditService>();
+builder.Services.AddScoped<SchedulingAuditEvidenceConsumer>();
+builder.Services.AddSingleton<IRequestContextAccessor, WorkerSchedulingRequestContextAccessor>();
+builder.Services.AddSingleton<DeterministicPracticeManagementSystem>();
+builder.Services.AddSingleton<IPracticeManagementSystem>(p => p.GetRequiredService<DeterministicPracticeManagementSystem>());
+builder.Services.AddSingleton<SchedulingDispatchProcessor>();
+builder.Services.AddHostedService<SchedulingProviderWorker>();
 builder.Services.Configure<OutboxPublisherOptions>(
     builder.Configuration.GetSection(OutboxPublisherOptions.SectionName));
 builder.Services.AddHostedService<Worker>();

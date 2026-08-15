@@ -82,8 +82,8 @@ public sealed class DurablePathTests(DurablePathFixture fixture)
     {
         await using CallManagementDbContext context = fixture.CreateCalls();
         string[] schemas = await context.Database.SqlQueryRaw<string>(
-            "SELECT schema_name AS \"Value\" FROM information_schema.schemata WHERE schema_name IN ('eventing','call_management','conversation') ORDER BY schema_name").ToArrayAsync();
-        Assert.Equal(["call_management", "conversation", "eventing"], schemas);
+            "SELECT schema_name AS \"Value\" FROM information_schema.schemata WHERE schema_name IN ('eventing','call_management','conversation','scheduling') ORDER BY schema_name").ToArrayAsync();
+        Assert.Equal(["call_management", "conversation", "eventing", "scheduling"], schemas);
     }
 
     [Fact]

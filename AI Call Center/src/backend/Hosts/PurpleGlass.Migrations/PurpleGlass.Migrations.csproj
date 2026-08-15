@@ -7,6 +7,7 @@
     <ProjectReference Include="..\..\Modules\Conversation\Infrastructure\PurpleGlass.Modules.Conversation.Infrastructure.csproj" />
     <ProjectReference Include="..\..\Modules\Tenancy\Infrastructure\PurpleGlass.Modules.Tenancy.Infrastructure.csproj" />
     <ProjectReference Include="..\..\Modules\Audit\Infrastructure\PurpleGlass.Modules.Audit.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\Modules\Scheduling\Infrastructure\PurpleGlass.Modules.Scheduling.Infrastructure.csproj" />
   </ItemGroup>
 
   <ItemGroup>
