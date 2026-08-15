@@ -6,6 +6,8 @@ using PurpleGlass.Eventing;
 using PurpleGlass.Eventing.Infrastructure;
 using PurpleGlass.Observability;
 using System.Diagnostics;
+using System.Text.Json;
+using PurpleGlass.Modules.Scheduling.Contracts;
 
 namespace PurpleGlass.Integrations.Worker;
 
@@ -98,6 +100,15 @@ public sealed partial class Worker(
                     .Build();
 
                 _ = await client.PublishAsync(mqttMessage, cancellationToken);
+                if (string.Equals(message.Producer, "purpleglass-scheduling", StringComparison.Ordinal))
+                {
+                    SchedulingAuditEvidence evidence = JsonSerializer.Deserialize<SchedulingAuditEvidence>(message.Payload)
+                        ?? throw new InvalidOperationException("Scheduling audit evidence was invalid.");
+                    SchedulingAuditEvidenceConsumer auditConsumer = scope.ServiceProvider.GetRequiredService<SchedulingAuditEvidenceConsumer>();
+                    _ = await auditConsumer.ConsumeAsync(
+                        message.Id, message.TenantId, message.LocationId, "scheduling-system",
+                        message.CorrelationId, evidence, cancellationToken);
+                }
                 await store.MarkPublishedAsync(
                     message,
                     leaseId,
